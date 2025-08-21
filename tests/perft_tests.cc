@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../src/engine/board.hh"
-#include "../src/engine/move.hh"
-#include "../src/engine/movegen.hh"
+#include "board.hh"
+#include "move.hh"
+#include "movegen.hh"
 
 TEST_CASE("Empty movegen returns zero")
 {
