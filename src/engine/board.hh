@@ -1,15 +1,18 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace engine
 {
     using Bitboard = uint64_t;
+
     enum Colour
     {
         WHITE,
         BLACK
     };
+
     enum Piece
     {
         PAWN,
@@ -21,11 +24,22 @@ namespace engine
         NO_PIECE
     };
 
+    struct CastlingRights
+    {
+        bool wk{true};
+        bool wq{true};
+        bool bk{true};
+        bool bq{true};
+    };
+
     struct Board
     {
-        Bitboard pieces[2][6]{}; // pieces[colour][piece]
+        Bitboard pieces[2][6]{};
         Colour side_to_move{WHITE};
-        // castling, ep, halfmove
+        CastlingRights castle{};
+        std::optional<int> ep_square{}; // en passent square 0...63 if available.
+        int halfmove_clock{0};
+        int fullmove_number{1};
 
         static Board startpos();
     };
@@ -37,8 +51,6 @@ namespace engine
             occ |= b.pieces[c][p];
         return occ;
     }
-    inline Bitboard occupancy(const Board &b)
-    {
-        return occupancy(b, WHITE) | occupancy(b, BLACK);
-    }
+    inline Bitboard occupancy(const Board &b) { return occupancy(b, WHITE) | occupancy(b, BLACK); }
+
 }
