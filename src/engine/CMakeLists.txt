@@ -4,10 +4,10 @@ add_library(engine STATIC
     attack_tables.hh attack_tables.cc
     move.hh
     movegen.hh movegen.cc
+    move_do.hh move_do.cc
     search.cc
     fen.hh fen.cc
-    perft.hh perft.cc)   # <-- add these
-
+    perft.hh perft.cc)
 
 target_include_directories(engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(engine PRIVATE -Wall -Wextra -Wpedantic)

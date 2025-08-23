@@ -1,26 +1,24 @@
 #include "perft.hh"
 #include "movegen.hh"
-// (When you implement make/unmake, include it and update this)
+#include "move_do.hh"
 
 namespace engine
 {
-
-    static void do_make(Board &, Move) { /* TODO: implement */ }
-    static void do_unmake(Board &, Move) { /* TODO: implement */ }
-
     std::uint64_t perft(Board &b, int depth)
     {
         if (depth == 0)
             return 1;
-        auto moves = generate_moves(b); // pseudo-legal now; replace with legal later
+
+        auto moves = generate_legal_moves(b);
         std::uint64_t nodes = 0;
+
         for (auto m : moves)
         {
-            do_make(b, m);
+            Undo u;
+            make_move(b, m, u);
             nodes += perft(b, depth - 1);
-            do_unmake(b, m);
+            unmake_move(b, m, u);
         }
         return nodes;
     }
-
-} // namespace engine
+}
