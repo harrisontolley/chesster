@@ -1,6 +1,5 @@
 #pragma once
 #include <cstdint>
-#include <array>
 
 namespace engine
 {
@@ -95,5 +94,10 @@ namespace engine
     inline Bitboard south(Bitboard b) { return b >> 8; }
     inline Bitboard east(Bitboard b) { return (b & ~FileBB[7]) << 1; }
     inline Bitboard west(Bitboard b) { return (b & ~FileBB[0]) >> 1; }
+
+    inline Bitboard ne(Bitboard b) { return (b & ~FileBB[7]) << 9; }
+    inline Bitboard nw(Bitboard b) { return (b & ~FileBB[0]) << 7; }
+    inline Bitboard se(Bitboard b) { return (b & ~FileBB[7]) >> 7; }
+    inline Bitboard sw(Bitboard b) { return (b & ~FileBB[0]) >> 9; }
 
 }

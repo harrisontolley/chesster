@@ -1,11 +1,10 @@
 #pragma once
 #include <array>
-#include <cstdint>
 #include <optional>
+#include "bitboard.hh"
 
 namespace engine
 {
-    using Bitboard = uint64_t;
 
     enum Colour
     {
