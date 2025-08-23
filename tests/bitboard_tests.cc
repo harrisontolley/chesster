@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
-#include "../src/engine/bitboard.hh"
+#include "bitboard.hh"
+
+using namespace engine;
 
 TEST_CASE("Square helpers")
 {
-    using namespace engine;
-
     SECTION("File extraction")
     {
         REQUIRE(file(A1) == 0);
