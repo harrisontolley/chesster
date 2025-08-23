@@ -34,7 +34,7 @@ namespace engine
         }
         else
         {
-            if ((se(b.pieces[BLACK][PAWN] | sw(b.pieces[BLACK][PAWN])) & target))
+            if (((se(b.pieces[BLACK][PAWN]) | sw(b.pieces[BLACK][PAWN])) & target))
                 return true;
         }
 
