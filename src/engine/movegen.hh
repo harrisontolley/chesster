@@ -5,5 +5,6 @@
 
 namespace engine
 {
+    // public API
     std::vector<Move> generate_moves(const Board &);
 }

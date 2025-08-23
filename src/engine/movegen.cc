@@ -18,6 +18,85 @@ namespace engine
         out.push_back(make_move(f, t, fl));
     }
 
+    static bool is_square_attacked(const engine::Board &b, int sq, engine::Colour by)
+    {
+
+        const Bitboard occAll = occupancy(b);
+
+        // bitmask of square we're checking
+        const Bitboard target = 1ULL << sq;
+
+        // check if pawn is attacking target square
+        if (by == WHITE)
+        {
+            if (((ne(b.pieces[WHITE][PAWN]) | nw(b.pieces[WHITE][PAWN])) & target))
+                return true;
+        }
+        else
+        {
+            if ((se(b.pieces[BLACK][PAWN] | sw(b.pieces[BLACK][PAWN])) & target))
+                return true;
+        }
+
+        // knight attacks from bitboard lookup array
+        if (KNIGHT_ATTACKS[sq] & b.pieces[by][KNIGHT])
+            return true;
+
+        // king adjacent squares
+        {
+            Bitboard k = target;
+            Bitboard kingAtt = (north(k) | south(k) | east(k) | west(k) | ne(k) | nw(k) | se(k) | sw(k));
+
+            if (kingAtt & b.pieces[by][KING])
+                return true;
+        }
+
+        // slicing pieces
+        // lambda func for ray hitting
+        auto ray_hit = [&](Bitboard (*step)(Bitboard), Bitboard sliders) -> bool
+        {
+            Bitboard r = target;
+            while (true)
+            {
+                r = step(r);
+
+                if (!r)
+                    break;
+                if (r & occAll)
+                {
+                    if (r & sliders)
+                        return true;
+                    break;
+                }
+            }
+            return false;
+        };
+
+        const Bitboard rook_queen = b.pieces[by][ROOK] | b.pieces[by][QUEEN];
+        const Bitboard bishop_queen = b.pieces[by][BISHOP] | b.pieces[by][QUEEN];
+
+        if (ray_hit(&north, rook_queen))
+            return true;
+        if (ray_hit(&south, rook_queen))
+            return true;
+        if (ray_hit(&east, rook_queen))
+            return true;
+        if (ray_hit(&west, rook_queen))
+            return true;
+
+        if (ray_hit(&ne, bishop_queen))
+            return true;
+        if (ray_hit(&nw, bishop_queen))
+            return true;
+        if (ray_hit(&se, bishop_queen))
+            return true;
+        if (ray_hit(&sw, bishop_queen))
+            return true;
+
+        // no pieces attack square
+        return false;
+    }
+
     static void gen_sliding(std::vector<Move> &out, [[maybe_unused]] const Board &b, Bitboard pieces, Bitboard occUs, Bitboard occThem, int deltas[4])
     {
         while (pieces)
@@ -303,28 +382,88 @@ namespace engine
         }
 
         // king  !!! (no castling yet) !!!
-        Bitboard king = b.pieces[us][KING];
-        if (king)
         {
-            int from = __builtin_ctzll(king);
-            Bitboard kMoves =
-                (north(king) | south(king) | east(king) | west(king) |
-                 ne(king) | nw(king) | se(king) | sw(king)) &
-                ~occUs;
-
-            Bitboard caps = kMoves & occThem;
-            Bitboard quiet = kMoves & ~occThem;
-
-            while (quiet)
+            Bitboard king = b.pieces[us][KING];
+            if (king)
             {
-                int to = pop_lsb(quiet);
-                push(moves, from, to, QUIET);
-            }
+                int from = __builtin_ctzll(king);
+                Bitboard kMoves =
+                    (north(king) | south(king) | east(king) | west(king) |
+                     ne(king) | nw(king) | se(king) | sw(king)) &
+                    ~occUs;
 
-            while (caps)
-            {
-                int to = pop_lsb(caps);
-                push(moves, from, to, CAPTURE);
+                Bitboard caps = kMoves & occThem;
+                Bitboard quiet = kMoves & ~occThem;
+
+                while (quiet)
+                {
+                    int to = pop_lsb(quiet);
+                    push(moves, from, to, QUIET);
+                }
+                while (caps)
+                {
+                    int to = pop_lsb(caps);
+                    push(moves, from, to, CAPTURE);
+                }
+
+                // castling
+                if (us == WHITE)
+                {
+                    const bool kingOnE1 = (b.pieces[WHITE][KING] & (1ULL << E1)) != 0;
+
+                    // can castle kingside (E1 -> G1) if rook on H1, F1/G1 empty and no squares in check.
+                    if (b.castle.wk && kingOnE1)
+                    {
+                        bool rookOnH1 = (b.pieces[WHITE][ROOK] & (1ULL << H1)) != 0;
+                        bool pathEmpty = (occAll & ((1ULL << F1) | (1ULL << G1))) == 0;
+                        bool safe = !is_square_attacked(b, E1, them) && !is_square_attacked(b, F1, them) && !is_square_attacked(b, G1, them);
+
+                        if (rookOnH1 && pathEmpty && safe)
+                        {
+                            push(moves, E1, G1, KING_CASTLE);
+                        }
+                    }
+
+                    // can castle queenside (E1 -> A1) if rook on A1, B1/C1/D1 empty and no squares in check.
+                    if (b.castle.wq && kingOnE1)
+                    {
+                        bool rookOnA1 = (b.pieces[WHITE][ROOK] & (1ULL << A1)) != 0;
+                        bool pathEmpty = (occAll & ((1ULL << D1) | (1ULL << C1) | (1ULL << B1))) == 0;
+                        bool safe = !is_square_attacked(b, E1, them) && !is_square_attacked(b, D1, them) && !is_square_attacked(b, C1, them);
+                        if (rookOnA1 && pathEmpty && safe)
+                        {
+                            push(moves, E1, C1, QUEEN_CASTLE);
+                        }
+                    }
+                }
+                else
+                {
+                    const bool kingOnE8 = (b.pieces[BLACK][KING] & (1ULL << E8)) != 0;
+
+                    // can castle kingside (E8 -> G8) if rook on H8, F8/G8 empty and no squares in check.
+                    if (b.castle.bk && kingOnE8)
+                    {
+                        bool rookOnH8 = (b.pieces[BLACK][ROOK] & (1ULL << H8)) != 0;
+                        bool pathEmpty = (occAll & ((1ULL << F8) | (1ULL << G8))) == 0;
+                        bool safe = !is_square_attacked(b, E8, them) && !is_square_attacked(b, F8, them) && !is_square_attacked(b, G8, them);
+                        if (rookOnH8 && pathEmpty && safe)
+                        {
+                            push(moves, E8, G8, KING_CASTLE);
+                        }
+                    }
+
+                    // can castle queenside (E8 -> A8) if rook on A8, B8/C8/D8 empty and no squares in check.
+                    if (b.castle.bq && kingOnE8)
+                    {
+                        bool rookOnA8 = (b.pieces[BLACK][ROOK] & (1ULL << A8)) != 0;
+                        bool pathEmpty = (occAll & ((1ULL << D8) | (1ULL << C8) | (1ULL << B8))) == 0;
+                        bool safe = !is_square_attacked(b, E8, them) && !is_square_attacked(b, D8, them) && !is_square_attacked(b, C8, them);
+                        if (rookOnA8 && pathEmpty && safe)
+                        {
+                            push(moves, E8, C8, QUEEN_CASTLE);
+                        }
+                    }
+                }
             }
         }
 
