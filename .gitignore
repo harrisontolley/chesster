@@ -1,6 +1,25 @@
 script.py
 output.txt
 
+# Build trees
+/build/
+/build-debug/
+/build-release/
+/build/*
+
+# CMake junk
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# VS Code
+.vscode/
+.history
+
+
 build/
 *.o
 *.nnue

@@ -5,7 +5,8 @@ add_library(engine STATIC
     move.hh
     movegen.hh movegen.cc
     search.cc
-    fen.hh fen.cc) 
+    fen.hh fen.cc
+    perft.hh perft.cc)   # <-- add these
 
 
 target_include_directories(engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
