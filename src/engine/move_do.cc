@@ -18,21 +18,22 @@ namespace engine
         return NO_PIECE;
     }
 
-    // ----------------- Attack detection (single source of truth) -----------------
     bool is_square_attacked(const Board &b, int sq, Colour by)
     {
         const Bitboard occAll = occupancy(b);
         const Bitboard target = 1ULL << sq;
 
-        // pawns
+        // pawns: shift the target TOWARD the side that could capture into it
         if (by == WHITE)
         {
-            if ((ne(b.pieces[WHITE][PAWN]) | nw(b.pieces[WHITE][PAWN])) & target)
+            // A white pawn attacks from one rank below target (south) diagonally
+            if ((se(target) & b.pieces[WHITE][PAWN]) || (sw(target) & b.pieces[WHITE][PAWN]))
                 return true;
         }
         else
         {
-            if ((se(b.pieces[BLACK][PAWN]) | sw(b.pieces[BLACK][PAWN])) & target)
+            // A black pawn attacks from one rank above target (north) diagonally
+            if ((ne(target) & b.pieces[BLACK][PAWN]) || (nw(target) & b.pieces[BLACK][PAWN]))
                 return true;
         }
 
@@ -49,7 +50,7 @@ namespace engine
                 return true;
         }
 
-        // sliders
+        // sliders unchanged ...
         auto ray_hit = [&](Bitboard (*step)(Bitboard), Bitboard sliders)
         {
             Bitboard r = target;
@@ -71,28 +72,17 @@ namespace engine
         const Bitboard rq = b.pieces[by][ROOK] | b.pieces[by][QUEEN];
         const Bitboard bq = b.pieces[by][BISHOP] | b.pieces[by][QUEEN];
 
-        if (ray_hit(&north, rq))
-            return true;
-        if (ray_hit(&south, rq))
-            return true;
-        if (ray_hit(&east, rq))
-            return true;
-        if (ray_hit(&west, rq))
+        if (ray_hit(&north, rq) || ray_hit(&south, rq) ||
+            ray_hit(&east, rq) || ray_hit(&west, rq))
             return true;
 
-        if (ray_hit(&ne, bq))
-            return true;
-        if (ray_hit(&nw, bq))
-            return true;
-        if (ray_hit(&se, bq))
-            return true;
-        if (ray_hit(&sw, bq))
+        if (ray_hit(&ne, bq) || ray_hit(&nw, bq) ||
+            ray_hit(&se, bq) || ray_hit(&sw, bq))
             return true;
 
         return false;
     }
 
-    // ----------------- Castling-right updates -----------------
     static inline void clear_castle_if_rook_moves(Board &b, Colour us, int fromSq)
     {
         if (us == WHITE)

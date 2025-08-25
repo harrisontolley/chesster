@@ -162,10 +162,18 @@ namespace engine
             if (b.ep_square)
             {
                 int eps = *b.ep_square;
-                if (eps - 7 >= 0 && (pawns & (1ULL << (eps - 7))))
-                    push(moves, eps - 7, eps, EN_PASSANT);
-                if (eps - 9 >= 0 && (pawns & (1ULL << (eps - 9))))
-                    push(moves, eps - 9, eps, EN_PASSANT);
+
+                // Ensure an enemy pawn actually double-pushed to create this ep square
+                if (eps >= 8 && (b.pieces[BLACK][PAWN] & (1ULL << (eps - 8))))
+                {
+                    Bitboard target = 1ULL << eps;
+
+                    // From squares are eps-9 (NE from white pawn) and eps-7 (NW from white pawn)
+                    if (ne(pawns) & target)
+                        push(moves, eps - 9, eps, EN_PASSANT);
+                    if (nw(pawns) & target)
+                        push(moves, eps - 7, eps, EN_PASSANT);
+                }
             }
         }
         else // BLACK
@@ -239,10 +247,18 @@ namespace engine
             if (b.ep_square)
             {
                 int eps = *b.ep_square;
-                if (eps + 7 <= 63 && (pawns & (1ULL << (eps + 7))))
-                    push(moves, eps + 7, eps, EN_PASSANT);
-                if (eps + 9 <= 63 && (pawns & (1ULL << (eps + 9))))
-                    push(moves, eps + 9, eps, EN_PASSANT);
+
+                // Ensure an enemy pawn actually double-pushed to create this ep square
+                if (eps <= 55 && (b.pieces[WHITE][PAWN] & (1ULL << (eps + 8))))
+                {
+                    Bitboard target = 1ULL << eps;
+
+                    // From squares are eps+7 (SE from black pawn) and eps+9 (SW from black pawn)
+                    if (se(pawns) & target)
+                        push(moves, eps + 7, eps, EN_PASSANT);
+                    if (sw(pawns) & target)
+                        push(moves, eps + 9, eps, EN_PASSANT);
+                }
             }
         }
 
@@ -317,7 +333,7 @@ namespace engine
                     if (b.castle.wk && kingOnE1)
                     {
                         bool rookOnH1 = (b.pieces[WHITE][ROOK] & (1ULL << H1)) != 0;
-                        bool pathEmpty = (occAll & ((1ULL << F1) | (1ULL << G1))) == 0;
+                        bool pathEmpty = (occAll & ((1ULL << D1) | (1ULL << C1))) == 0;
                         bool safe = !is_square_attacked(b, E1, them) &&
                                     !is_square_attacked(b, F1, them) &&
                                     !is_square_attacked(b, G1, them);
@@ -327,7 +343,7 @@ namespace engine
                     if (b.castle.wq && kingOnE1)
                     {
                         bool rookOnA1 = (b.pieces[WHITE][ROOK] & (1ULL << A1)) != 0;
-                        bool pathEmpty = (occAll & ((1ULL << D1) | (1ULL << C1) | (1ULL << B1))) == 0;
+                        bool pathEmpty = (occAll & ((1ULL << D8) | (1ULL << C8))) == 0;
                         bool safe = !is_square_attacked(b, E1, them) &&
                                     !is_square_attacked(b, D1, them) &&
                                     !is_square_attacked(b, C1, them);
