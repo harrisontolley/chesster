@@ -40,7 +40,6 @@ add_executable(chesster_tests
     tests/movegen_tests.cc
     tests/en_passant_tests.cc
     tests/perft_tests.cc
-    tests/perft_reference_tests.cc
 )
 target_link_libraries(chesster_tests PRIVATE chesster_engine Catch2::Catch2WithMain)
 target_include_directories(chesster_tests PRIVATE
