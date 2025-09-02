@@ -3,8 +3,6 @@
 #include "move.hh"
 #include "movegen.hh"
 #include "move_do.hh"
-#include "movegen.hh"
-#include "move_do.hh"
 #include "perft.hh"
 #include <iostream>
 #include <sstream>
