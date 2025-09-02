@@ -104,22 +104,25 @@ int main()
         if (line.rfind("position", 0) == 0)
         {
             std::istringstream ss(line);
-            std::string tok;
-            ss >> tok; // "position"
-            ss >> tok; // "position"
-            ss >> tok;
+            std::string word;
+            ss >> word; // "position"
 
-            if (tok == "startpos")
+            std::string sub;
+            if (!(ss >> sub))
+                continue; // expect "startpos" or "fen"
+
+            if (sub == "startpos")
             {
                 pos = Board::startpos();
             }
-            else if (tok == "fen")
+            else if (sub == "fen")
             {
                 // read exactly 6 FEN tokens
                 std::string f1, f2, f3, f4, f5, f6;
                 ss >> f1 >> f2 >> f3 >> f4 >> f5 >> f6;
                 pos = from_fen(f1 + " " + f2 + " " + f3 + " " + f4 + " " + f5 + " " + f6);
             }
+
             // optional trailing moves
             std::string w;
             if (ss >> w && w == "moves")
