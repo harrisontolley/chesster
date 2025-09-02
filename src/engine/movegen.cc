@@ -333,7 +333,7 @@ namespace engine
                     if (b.castle.wk && kingOnE1)
                     {
                         bool rookOnH1 = (b.pieces[WHITE][ROOK] & (1ULL << H1)) != 0;
-                        bool pathEmpty = (occAll & ((1ULL << D1) | (1ULL << C1))) == 0;
+                        bool pathEmpty = (occAll & ((1ULL << F1) | (1ULL << G1))) == 0;
                         bool safe = !is_square_attacked(b, E1, them) &&
                                     !is_square_attacked(b, F1, them) &&
                                     !is_square_attacked(b, G1, them);
@@ -343,7 +343,7 @@ namespace engine
                     if (b.castle.wq && kingOnE1)
                     {
                         bool rookOnA1 = (b.pieces[WHITE][ROOK] & (1ULL << A1)) != 0;
-                        bool pathEmpty = (occAll & ((1ULL << D8) | (1ULL << C8))) == 0;
+                        bool pathEmpty = (occAll & ((1ULL << B1) | (1ULL << C1) | (1ULL << D1))) == 0;
                         bool safe = !is_square_attacked(b, E1, them) &&
                                     !is_square_attacked(b, D1, them) &&
                                     !is_square_attacked(b, C1, them);
