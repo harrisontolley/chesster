@@ -1,7 +1,8 @@
-// universal chess interface
 #include "board.hh"
 #include "fen.hh"
 #include "move.hh"
+#include "movegen.hh"
+#include "move_do.hh"
 #include "movegen.hh"
 #include "move_do.hh"
 #include "perft.hh"
@@ -105,7 +106,9 @@ int main()
             std::istringstream ss(line);
             std::string tok;
             ss >> tok; // "position"
+            ss >> tok; // "position"
             ss >> tok;
+
             if (tok == "startpos")
             {
                 pos = Board::startpos();

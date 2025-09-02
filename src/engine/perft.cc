@@ -24,6 +24,7 @@ namespace engine
     {
         std::vector<std::pair<Move, std::uint64_t>> out;
         auto moves = generate_legal_moves(b);
+
         for (auto m : moves)
         {
             Undo u;
