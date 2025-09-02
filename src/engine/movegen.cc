@@ -381,6 +381,9 @@ namespace engine
         return moves;
     }
 
+    // uses pseudo-move generator to generate all possible moves.
+    // moves are legal if they dont result in the player moving to be
+    // placed in check.
     std::vector<Move> generate_legal_moves(Board &b)
     {
         std::vector<Move> legal;
@@ -398,9 +401,11 @@ namespace engine
             bool in_check = (ksq >= 0) && is_square_attacked(b, ksq, them);
 
             unmake_move(b, m, u);
+
             if (!in_check)
                 legal.push_back(m);
         }
+
         return legal;
     }
 }

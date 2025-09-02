@@ -135,6 +135,7 @@ namespace engine
         u.fullmove_prev = b.fullmove_number;
         u.captured_piece = NO_PIECE;
         u.moved_piece = piece_at(b, us, from);
+
         assert(u.moved_piece != NO_PIECE && "No piece on from-square");
 
         // defaults

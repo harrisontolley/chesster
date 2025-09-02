@@ -10,8 +10,9 @@ using namespace engine;
 
 static std::size_t count_moves_with_flag(const std::vector<Move> &ms, int f)
 {
-    return static_cast<std::size_t>(std::count_if(ms.begin(), ms.end(), [&](Move m)
-                                                  { return flag(m) == f; }));
+    return static_cast<std::size_t>(
+        std::count_if(ms.begin(), ms.end(), [&](Move m)
+                      { return flag(m) == f; }));
 }
 
 // Helper: count legal EP moves in a position FEN
