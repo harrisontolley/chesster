@@ -26,7 +26,7 @@ add_library(chesster_engine
   src/engine/movegen.cc
   src/engine/perft.cc
   src/engine/search.cc
-  src/eval/stub_eval.cc
+  src/eval/nnue_eval.cc
 )
 target_include_directories(chesster_engine PUBLIC
   ${CMAKE_SOURCE_DIR}/src
