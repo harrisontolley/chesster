@@ -1,3 +1,4 @@
+// --- src/eval/nnue_eval.cc ---
 #include "eval.hh"
 #include "../engine/board.hh"
 #include <vector>
@@ -7,13 +8,15 @@
 #include <cstring>
 #include <algorithm>
 #include <optional>
+#include <sys/stat.h>
 
 namespace eval
 {
 
     // simple 1-hidden layer perspective NNUE.
-    // Layout
+    // Layout in raw.bin (float32, little-endian):
     // l0w: [768 x H], l0b: [H], l1w: [2H x 1], l1b: [1]
+    // => total floats = H*771 + 1
 
     static std::vector<float> L0W;
     static std::vector<float> L0B;
@@ -39,15 +42,11 @@ namespace eval
             for (int p = engine::PAWN; p <= engine::KING; ++p)
             {
                 engine::Bitboard bb = b.pieces[c][p];
-
-                int chanBase = (c == ref ? 0 : 6) + p; // as is a STM network, offset if not ref colour.
-
+                int chanBase = ((c == ref) ? 0 : 6) + p; // 0..5 for ref, 6..11 for opp
                 while (bb)
                 {
                     int sq = __builtin_ctzll(bb);
-                    bb &= (bb - 1); // clear the least significant bit
-
-                    // no board flipping. square index is 0..63 as is
+                    bb &= (bb - 1);
                     x[chanBase * 64 + sq] = 1.0f;
                 }
             }
@@ -56,17 +55,21 @@ namespace eval
 
     static inline int to_centipawns(float y)
     {
-        constexpr float EVAL_SCALE = 400.0f;
+        constexpr float EVAL_SCALE = 400.0f; // match trainer schedule
         float cp = y * EVAL_SCALE;
-        // clamp huge values to be safe
-
         if (cp > 20000)
             cp = 20000.0f;
-
         if (cp < -20000)
             cp = -20000.0f;
-
         return static_cast<int>(cp);
+    }
+
+    static bool is_dir(const std::string &p)
+    {
+        struct stat st{};
+        if (stat(p.c_str(), &st) != 0)
+            return false;
+        return S_ISDIR(st.st_mode);
     }
 
     bool load_weights(const char *path)
@@ -80,26 +83,25 @@ namespace eval
 
         std::string fpath;
         if (path && *path)
-        {
             fpath = path;
-        }
-        else
+        else if (const char *env = std::getenv("CHESSTER_NET"))
+            fpath = env;
+
+        if (fpath.empty())
+            throw std::runtime_error("eval::load_weights: no path (set UCI option EvalFile or CHESSTER_NET)");
+
+        // Allow passing the *checkpoint directory*; auto-append raw.bin
+        if (is_dir(fpath))
         {
-            // environment override for convenience
-            if (const char *env = std::getenv("CHESSTER_NET"))
-                fpath = env;
-            if (fpath.empty())
-            {
-                // runtime error
-                throw std::runtime_error("Failed to find NNUE weights");
-            }
+            if (fpath.back() != '/' && fpath.back() != '\\')
+                fpath += '/';
+            fpath += "raw.bin";
         }
 
         std::ifstream in(fpath, std::ios::binary);
         if (!in)
             return false;
 
-        // Read whole file
         in.seekg(0, std::ios::end);
         std::streamoff bytes = in.tellg();
         in.seekg(0, std::ios::beg);
@@ -107,7 +109,6 @@ namespace eval
             return false;
 
         const std::size_t n_floats = static_cast<std::size_t>(bytes) / 4;
-        // n_floats = 768*H + H + 2H + 1 = H*(768 + 1 + 2) + 1 = H*771 + 1
         if ((n_floats < 1) || ((n_floats - 1) % 771) != 0)
             return false;
 
@@ -124,7 +125,6 @@ namespace eval
         const std::size_t l0w_sz = static_cast<std::size_t>(768) * H;
         const std::size_t l0b_sz = static_cast<std::size_t>(H);
         const std::size_t l1w_sz = static_cast<std::size_t>(2 * H);
-        // const std::size_t l1b_sz = 1;
 
         L0W.assign(buf.begin() + off, buf.begin() + off + l0w_sz);
         off += l0w_sz;
@@ -132,16 +132,15 @@ namespace eval
         off += l0b_sz;
         L1W.assign(buf.begin() + off, buf.begin() + off + l1w_sz);
         off += l1w_sz;
-        L1B = buf[off]; // last one
+        L1B = buf[off];
         READY = true;
         return true;
     }
 
     int evaluate(const engine::Board &b)
     {
-
         if (!READY)
-            throw std::runtime_error("NNUE not ready");
+            throw std::runtime_error("NNUE not ready (call load_weights)");
 
         const engine::Colour stm = b.side_to_move;
         const engine::Colour ntm = (stm == engine::WHITE) ? engine::BLACK : engine::WHITE;
@@ -155,33 +154,24 @@ namespace eval
         for (int i = 0; i < H; ++i)
         {
             const float *wrow = &L0W[i * 768];
-            float acc = L0B[i];
-
+            float a = L0B[i];
+            float b2 = L0B[i];
             for (int j = 0; j < 768; ++j)
             {
-                acc += wrow[j] * x_stm[j];
+                a += wrow[j] * x_stm[j];
+                b2 += wrow[j] * x_ntm[j];
             }
-            h_stm[i] = screlu(acc);
+            h_stm[i] = screlu(a);
+            h_ntm[i] = screlu(b2);
         }
 
-        // Hidden for ntm
-        for (int i = 0; i < H; ++i)
-        {
-            const float *wrow = &L0W[i * 768];
-            float acc = L0B[i];
-            for (int j = 0; j < 768; ++j)
-                acc += wrow[j] * x_ntm[j];
-            h_ntm[i] = screlu(acc);
-        }
-
-        // Concatenate and output
         float y = L1B;
         for (int i = 0; i < H; ++i)
             y += L1W[i] * h_stm[i];
         for (int i = 0; i < H; ++i)
             y += L1W[H + i] * h_ntm[i];
 
-        return to_centipawns(y); // side-to-move centipawns
+        return to_centipawns(y); // stm-relative centipawns
     }
 
-}
+} // namespace eval

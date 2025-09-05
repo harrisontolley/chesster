@@ -1,9 +1,12 @@
+// --- src/engine/uci.cc ---
 #include "board.hh"
 #include "fen.hh"
 #include "move.hh"
 #include "movegen.hh"
 #include "move_do.hh"
 #include "perft.hh"
+#include "search.cc"
+#include "../eval/eval.hh"
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -46,21 +49,46 @@ static std::string move_to_uci(Move m)
     return s;
 }
 
-// find & apply a UCI move in the current position
 static bool apply_uci_move(Board &pos, const std::string &uciMove)
 {
-    Board tmp = pos; // legal gen mutates, so use a copy
+    Board tmp = pos;
     auto legal = generate_legal_moves(tmp);
     for (Move m : legal)
     {
         if (move_to_uci(m) == uciMove)
         {
             Undo u;
-            make_move(pos, m, u); // apply permanently
+            make_move(pos, m, u);
             return true;
         }
     }
     return false;
+}
+
+static std::string eval_file_path; // from UCI setoption
+
+static void initialise_eval()
+{
+    static bool eval_loaded = false;
+    if (!eval_loaded)
+    {
+        const char *p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
+        if (!eval::load_weights(p))
+        {
+            std::cout << "info string eval: FAILED to load weights\n";
+        }
+        else
+        {
+            std::cout << "info string eval: weights loaded\n";
+            eval_loaded = true;
+        }
+    }
+}
+
+static void uci_print_id()
+{
+    std::cout << "id name Chesster\n";
+    std::cout << "id author harrisontolley\n";
 }
 
 int main()
@@ -69,11 +97,13 @@ int main()
     std::cout << std::unitbuf;
     std::cin.tie(&std::cout);
 
-    std::cout << "id name Chesster\n";
-    std::cout << "id author harrisontolley\n";
+    uci_print_id();
+    // Advertise UCI options
+    std::cout << "option name EvalFile type string default (use setoption or CHESSTER_NET/raw.bin)\n";
     std::cout << "uciok\n";
 
     Board pos = Board::startpos();
+
     std::string line;
     while (std::getline(std::cin, line))
     {
@@ -82,17 +112,50 @@ int main()
 
         if (line == "uci")
         {
-            std::cout << "id name Chesster\n";
-            std::cout << "id author harrisontolley\n";
+            uci_print_id();
+            std::cout << "option name EvalFile type string default (use setoption or CHESSTER_NET/raw.bin)\n";
             std::cout << "uciok\n";
+            continue;
+        }
+
+        if (line.rfind("setoption", 0) == 0)
+        {
+            // setoption name EvalFile value /path/to/checkpoint_or_raw.bin
+            std::istringstream ss(line);
+            std::string w, name, key, value;
+            ss >> w;    // setoption
+            ss >> w;    // name
+            ss >> name; // EvalFile or others
+            if (name == "EvalFile")
+            {
+                // consume "value" and the rest as path (can contain spaces)
+                ss >> w; // value
+                std::getline(ss, value);
+                // trim leading spaces
+                while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+                    value.erase(value.begin());
+                eval_file_path = value;
+                // force re-load next isready
+                // (simplest: clear the flag by re-calling load on next isready)
+            }
             continue;
         }
 
         if (line.rfind("isready", 0) == 0)
         {
+            // Load eval lazily here (so setoption has happened)
+            try
+            {
+                initialise_eval();
+            }
+            catch (const std::exception &e)
+            {
+                std::cout << "info string eval init error: " << e.what() << "\n";
+            }
             std::cout << "readyok\n";
             continue;
         }
+
         if (line.rfind("ucinewgame", 0) == 0)
         {
             pos = Board::startpos();
@@ -107,7 +170,7 @@ int main()
 
             std::string sub;
             if (!(ss >> sub))
-                continue; // expect "startpos" or "fen"
+                continue;
 
             if (sub == "startpos")
             {
@@ -115,13 +178,11 @@ int main()
             }
             else if (sub == "fen")
             {
-                // read exactly 6 FEN tokens
                 std::string f1, f2, f3, f4, f5, f6;
                 ss >> f1 >> f2 >> f3 >> f4 >> f5 >> f6;
                 pos = from_fen(f1 + " " + f2 + " " + f3 + " " + f4 + " " + f5 + " " + f6);
             }
 
-            // optional trailing moves
             std::string w;
             if (ss >> w && w == "moves")
             {
@@ -139,11 +200,14 @@ int main()
 
         if (line.rfind("go", 0) == 0)
         {
+            // Modes:
+            //   go perft depth N
+            //   go divide depth N
+            //   go depth N
             if (line.find("perft") != std::string::npos)
             {
                 int depth = 1;
-                auto dpos = line.find("depth");
-                if (dpos != std::string::npos)
+                if (auto dpos = line.find("depth"); dpos != std::string::npos)
                 {
                     std::istringstream dd(line.substr(dpos + 5));
                     dd >> depth;
@@ -156,8 +220,7 @@ int main()
             else if (line.find("divide") != std::string::npos)
             {
                 int depth = 1;
-                auto dpos = line.find("depth");
-                if (dpos != std::string::npos)
+                if (auto dpos = line.find("depth"); dpos != std::string::npos)
                 {
                     std::istringstream dd(line.substr(dpos + 5));
                     dd >> depth;
@@ -175,9 +238,31 @@ int main()
             }
             else
             {
-                std::cout << "bestmove 0000\n";
+                int depth = 5; // default if not specified
+                if (auto dpos = line.find("depth"); dpos != std::string::npos)
+                {
+                    std::istringstream dd(line.substr(dpos + 5));
+                    dd >> depth;
+                }
+                Board tmp = pos; // search works on a copy
+                Move bm = search_best_move(tmp, depth);
+                std::string u = bm ? move_to_uci(bm) : "0000";
+                std::cout << "bestmove " << u << "\n";
             }
             continue;
+        }
+
+        if (line.rfind("eval", 0) == 0)
+        {
+            try
+            {
+                initialise_eval();
+                std::cout << "info string eval cp: " << eval::evaluate(pos) << "\n";
+            }
+            catch (...)
+            {
+                std::cout << "info string eval failed\n";
+            }
         }
     }
     return 0;
