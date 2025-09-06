@@ -39,6 +39,11 @@ add_executable(chesster src/engine/uci.cc)
 target_link_libraries(chesster PRIVATE chesster_engine)
 target_compile_options(chesster PRIVATE -Wall -Wextra -Wpedantic)
 
+# --- Benchmark the evaluator ---
+add_executable(bench_eval tools/bench_eval.cc)
+target_link_libraries(bench_eval PRIVATE chesster_engine)
+target_compile_options(bench_eval PRIVATE -Wall -Wextra -Wpedantic)
+
 # ---- Tests ----
 include(CTest)
 enable_testing()
