@@ -2,9 +2,10 @@
 #include "engine/board.hh"
 #include "engine/fen.hh"
 #include "engine/move.hh"
-#include "engine/movegen.hh"
 #include "engine/move_do.hh"
+#include "engine/movegen.hh"
 #include "eval/eval.hh"
+
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -19,18 +20,19 @@
 
 using namespace engine;
 
-static void usage(const char *argv0)
+static void usage(const char* argv0)
 {
     std::cerr << "Usage:\n"
                  "  "
-              << argv0 << " --net PATH [--fens FILE] [--n N] [--loops L] [--warmup W] [--seed S]\n"
-                          "\n"
-                          "Notes:\n"
-                          "  PATH can be a checkpoint directory (containing raw.bin) or a raw.bin file.\n"
-                          "  If --fens is omitted, positions are generated via random playouts.\n";
+              << argv0
+              << " --net PATH [--fens FILE] [--n N] [--loops L] [--warmup W] [--seed S]\n"
+                 "\n"
+                 "Notes:\n"
+                 "  PATH can be a checkpoint directory (containing raw.bin) or a raw.bin file.\n"
+                 "  If --fens is omitted, positions are generated via random playouts.\n";
 }
 
-static bool read_fens(const std::string &path, std::vector<Board> &out)
+static bool read_fens(const std::string& path, std::vector<Board>& out)
 {
     std::ifstream in(path);
     if (!in)
@@ -40,8 +42,7 @@ static bool read_fens(const std::string &path, std::vector<Board> &out)
     out.clear();
     out.reserve(10000);
 
-    while (std::getline(in, line))
-    {
+    while (std::getline(in, line)) {
         // strip after a '|' or '#' if present
         auto bar = line.find('|');
         if (bar != std::string::npos)
@@ -63,12 +64,9 @@ static bool read_fens(const std::string &path, std::vector<Board> &out)
         if (!(ss >> f1 >> f2 >> f3 >> f4 >> f5 >> f6))
             continue;
 
-        try
-        {
+        try {
             out.push_back(from_fen(f1 + " " + f2 + " " + f3 + " " + f4 + " " + f5 + " " + f6));
-        }
-        catch (...)
-        {
+        } catch (...) {
             // skip invalid
         }
     }
@@ -83,12 +81,10 @@ static std::vector<Board> random_positions(std::size_t n, std::uint64_t seed)
     std::vector<Board> out;
     out.reserve(n);
 
-    for (std::size_t i = 0; i < n; ++i)
-    {
+    for (std::size_t i = 0; i < n; ++i) {
         Board b = Board::startpos();
         int plies = plies_dist(rng);
-        for (int p = 0; p < plies; ++p)
-        {
+        for (int p = 0; p < plies; ++p) {
             auto leg = generate_legal_moves(b);
             if (leg.empty())
                 break;
@@ -101,7 +97,7 @@ static std::vector<Board> random_positions(std::size_t n, std::uint64_t seed)
     return out;
 }
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     std::string net_path;
     std::string fen_file;
@@ -111,13 +107,10 @@ int main(int argc, char **argv)
     std::uint64_t SEED = 1;
 
     // --- parse args (dumb but effective) ---
-    for (int i = 1; i < argc; ++i)
-    {
+    for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        auto need = [&](const char *what) -> std::string
-        {
-            if (i + 1 >= argc)
-            {
+        auto need = [&](const char* what) -> std::string {
+            if (i + 1 >= argc) {
                 std::cerr << "Missing value for " << what << "\n";
                 std::exit(1);
             }
@@ -135,83 +128,66 @@ int main(int argc, char **argv)
             WARMUP = std::stoi(need("--warmup"));
         else if (a == "--seed")
             SEED = std::stoull(need("--seed"));
-        else if (a == "-h" || a == "--help")
-        {
+        else if (a == "-h" || a == "--help") {
             usage(argv[0]);
             return 0;
-        }
-        else
-        {
+        } else {
             std::cerr << "Unknown arg: " << a << "\n";
             usage(argv[0]);
             return 1;
         }
     }
 
-    if (net_path.empty())
-    {
+    if (net_path.empty()) {
         usage(argv[0]);
         return 1;
     }
 
     // --- load network ---
-    try
-    {
-        if (!eval::load_weights(net_path.c_str()))
-        {
+    try {
+        if (!eval::load_weights(net_path.c_str())) {
             std::cerr << "Failed to load NNUE from: " << net_path << "\n";
             return 2;
         }
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception& e) {
         std::cerr << "Error loading NNUE: " << e.what() << "\n";
         return 2;
     }
 
     // --- build positions (not timed) ---
     std::vector<Board> positions;
-    if (!fen_file.empty())
-    {
-        if (!read_fens(fen_file, positions) || positions.empty())
-        {
+    if (!fen_file.empty()) {
+        if (!read_fens(fen_file, positions) || positions.empty()) {
             std::cerr << "Failed to read any FENs from: " << fen_file << "\n";
             return 3;
         }
         if (positions.size() > N)
             positions.resize(N);
-        if (positions.size() < N)
-        {
+        if (positions.size() < N) {
             // repeat until reach N
             std::vector<Board> copy = positions;
-            while (positions.size() < N)
-            {
+            while (positions.size() < N) {
                 positions.push_back(copy[positions.size() % copy.size()]);
             }
         }
-    }
-    else
-    {
+    } else {
         positions = random_positions(N, SEED);
     }
 
-    std::cerr << "Prepared " << positions.size() << " positions. Warmup=" << WARMUP
-              << ", Loops=" << LOOPS << "\n";
+    std::cerr << "Prepared " << positions.size() << " positions. Warmup=" << WARMUP << ", Loops=" << LOOPS << "\n";
 
     // --- warmup ---
     volatile long long sink = 0; // prevent over-optimisation
-    for (int w = 0; w < WARMUP; ++w)
-    {
-        for (const auto &b : positions)
+    for (int w = 0; w < WARMUP; ++w) {
+        for (const auto& b : positions)
             sink += eval::evaluate(b);
     }
 
     // --- timed loops ---
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
-    for (int l = 0; l < LOOPS; ++l)
-    {
-        for (const auto &b : positions)
+    for (int l = 0; l < LOOPS; ++l) {
+        for (const auto& b : positions)
             sink += eval::evaluate(b);
     }
     auto t1 = clock::now();
@@ -224,9 +200,7 @@ int main(int argc, char **argv)
     const double ns_per = (secs * 1e9) / evals;
 
     std::cout << std::fixed << std::setprecision(2);
-    std::cout << "Evals: " << evals
-              << " | Time: " << secs << " s"
-              << " | Throughput: " << eps << " pos/s"
+    std::cout << "Evals: " << evals << " | Time: " << secs << " s" << " | Throughput: " << eps << " pos/s"
               << " | Latency: " << ns_per << " ns/eval\n";
 
     return 0;

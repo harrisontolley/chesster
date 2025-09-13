@@ -1,14 +1,15 @@
-#include <catch2/catch_test_macros.hpp>
-#include <cstdint>
-#include <vector>
-#include <utility>
-#include <string>
-#include <map>
 #include "board.hh"
 #include "fen.hh"
 #include "move.hh"
 #include "movegen.hh"
 #include "perft.hh"
+
+#include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace engine;
 
@@ -29,10 +30,9 @@ TEST_CASE("Startpos pseudo-legal has 20")
 }
 
 // helper to assert perft counts and divide sums
-static void require_perft_counts(Board base, const std::vector<std::uint64_t> &counts)
+static void require_perft_counts(Board base, const std::vector<std::uint64_t>& counts)
 {
-    for (std::size_t d = 0; d < counts.size(); ++d)
-    {
+    for (std::size_t d = 0; d < counts.size(); ++d) {
         const int depth = static_cast<int>(d + 1);
 
         // perft total
@@ -44,13 +44,12 @@ static void require_perft_counts(Board base, const std::vector<std::uint64_t> &c
         b = base;
         auto parts = perft_divide(b, depth);
         std::uint64_t sum = 0;
-        for (auto &kv : parts)
+        for (auto& kv : parts)
             sum += kv.second;
         REQUIRE(sum == counts[d]);
 
         // depth-1: nodes should equal number of legal moves
-        if (depth == 1)
-        {
+        if (depth == 1) {
             b = base;
             auto legal = generate_legal_moves(b);
             REQUIRE(static_cast<std::uint64_t>(legal.size()) == counts[d]);
@@ -58,10 +57,9 @@ static void require_perft_counts(Board base, const std::vector<std::uint64_t> &c
     }
 }
 
-struct PerftCase
-{
-    const char *name;
-    const char *fen;                   // nullptr defaults to startpos
+struct PerftCase {
+    const char* name;
+    const char* fen;                   // nullptr defaults to startpos
     std::vector<std::uint64_t> counts; // perft counts for depths 1..n
 };
 
@@ -69,27 +67,23 @@ TEST_CASE("Perft reference suite (CPW standard positions)")
 {
     const PerftCase cases[] = {
         // Start position
-        {
-            "Start position",
-            nullptr, // startpos
-            // CPW: 20, 400, 8902, 197281, 4865609
-            {20ULL, 400ULL, 8902ULL, 197281ULL, 4865609ULL, 119060324ULL}},
+        {"Start position",
+         nullptr, // startpos
+         // CPW: 20, 400, 8902, 197281, 4865609
+         {20ULL, 400ULL, 8902ULL, 197281ULL, 4865609ULL, 119060324ULL}},
         // Position 5 (CPW)
-        {
-            "Position 5",
-            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
-            // CPW: perft(1..3)
-            {44ULL, 1486ULL, 62379ULL}},
+        {"Position 5",
+         "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+         // CPW: perft(1..3)
+         {44ULL, 1486ULL, 62379ULL}},
         // Position 6 (bishop-full variant that yields 46 at depth 1)
-        {
-            "Position 6",
-            "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
-            // CPW: 46, 2079, 89890, 3894594
-            {46ULL, 2079ULL, 89890ULL, 3894594ULL}},
+        {"Position 6",
+         "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+         // CPW: 46, 2079, 89890, 3894594
+         {46ULL, 2079ULL, 89890ULL, 3894594ULL}},
     };
 
-    for (const auto &tc : cases)
-    {
+    for (const auto& tc : cases) {
         SECTION(tc.name)
         {
             Board b = tc.fen ? from_fen(tc.fen) : Board::startpos();
@@ -98,10 +92,9 @@ TEST_CASE("Perft reference suite (CPW standard positions)")
     }
 }
 
-struct TrickyPerftCase
-{
-    const char *name;
-    const char *fen;
+struct TrickyPerftCase {
+    const char* name;
+    const char* fen;
     int depth;
     std::uint64_t nodes;
 };
@@ -162,8 +155,7 @@ TEST_CASE("Perft tricky artificial positions (final count only)")
         {"double check (w)", "8/5k2/8/5N2/5Q2/2K5/8/8 w - - 0 1", 4, 23527ULL},
     };
 
-    for (const auto &tc : cases)
-    {
+    for (const auto& tc : cases) {
         SECTION(tc.name)
         {
             Board b = from_fen(tc.fen);

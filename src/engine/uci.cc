@@ -1,12 +1,13 @@
 // --- src/engine/uci.cc ---
+#include "../eval/eval.hh"
 #include "board.hh"
 #include "fen.hh"
 #include "move.hh"
-#include "movegen.hh"
 #include "move_do.hh"
+#include "movegen.hh"
 #include "perft.hh"
 #include "search.cc"
-#include "../eval/eval.hh"
+
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -25,8 +26,7 @@ static std::string sq_to_str(int sq)
 static std::string move_to_uci(Move m)
 {
     std::string s = sq_to_str(from_sq(m)) + sq_to_str(to_sq(m));
-    switch (flag(m))
-    {
+    switch (flag(m)) {
     case PROMO_Q:
     case PROMO_Q_CAPTURE:
         s += 'q';
@@ -49,14 +49,12 @@ static std::string move_to_uci(Move m)
     return s;
 }
 
-static bool apply_uci_move(Board &pos, const std::string &uciMove)
+static bool apply_uci_move(Board& pos, const std::string& uciMove)
 {
     Board tmp = pos;
     auto legal = generate_legal_moves(tmp);
-    for (Move m : legal)
-    {
-        if (move_to_uci(m) == uciMove)
-        {
+    for (Move m : legal) {
+        if (move_to_uci(m) == uciMove) {
             Undo u;
             make_move(pos, m, u);
             return true;
@@ -70,15 +68,11 @@ static std::string eval_file_path; // from UCI setoption
 static void initialise_eval()
 {
     static bool eval_loaded = false;
-    if (!eval_loaded)
-    {
-        const char *p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
-        if (!eval::load_weights(p))
-        {
+    if (!eval_loaded) {
+        const char* p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
+        if (!eval::load_weights(p)) {
             std::cout << "info string eval: FAILED to load weights\n";
-        }
-        else
-        {
+        } else {
             std::cout << "info string eval: weights loaded\n";
             eval_loaded = true;
         }
@@ -105,29 +99,25 @@ int main()
     Board pos = Board::startpos();
 
     std::string line;
-    while (std::getline(std::cin, line))
-    {
+    while (std::getline(std::cin, line)) {
         if (line == "quit")
             break;
 
-        if (line == "uci")
-        {
+        if (line == "uci") {
             uci_print_id();
             std::cout << "option name EvalFile type string default (use setoption or CHESSTER_NET/raw.bin)\n";
             std::cout << "uciok\n";
             continue;
         }
 
-        if (line.rfind("setoption", 0) == 0)
-        {
+        if (line.rfind("setoption", 0) == 0) {
             // setoption name EvalFile value /path/to/checkpoint_or_raw.bin
             std::istringstream ss(line);
             std::string w, name, key, value;
             ss >> w;    // setoption
             ss >> w;    // name
             ss >> name; // EvalFile or others
-            if (name == "EvalFile")
-            {
+            if (name == "EvalFile") {
                 // consume "value" and the rest as path (can contain spaces)
                 ss >> w; // value
                 std::getline(ss, value);
@@ -141,29 +131,23 @@ int main()
             continue;
         }
 
-        if (line.rfind("isready", 0) == 0)
-        {
+        if (line.rfind("isready", 0) == 0) {
             // Load eval lazily here (so setoption has happened)
-            try
-            {
+            try {
                 initialise_eval();
-            }
-            catch (const std::exception &e)
-            {
+            } catch (const std::exception& e) {
                 std::cout << "info string eval init error: " << e.what() << "\n";
             }
             std::cout << "readyok\n";
             continue;
         }
 
-        if (line.rfind("ucinewgame", 0) == 0)
-        {
+        if (line.rfind("ucinewgame", 0) == 0) {
             pos = Board::startpos();
             continue;
         }
 
-        if (line.rfind("position", 0) == 0)
-        {
+        if (line.rfind("position", 0) == 0) {
             std::istringstream ss(line);
             std::string word;
             ss >> word; // "position"
@@ -172,24 +156,18 @@ int main()
             if (!(ss >> sub))
                 continue;
 
-            if (sub == "startpos")
-            {
+            if (sub == "startpos") {
                 pos = Board::startpos();
-            }
-            else if (sub == "fen")
-            {
+            } else if (sub == "fen") {
                 std::string f1, f2, f3, f4, f5, f6;
                 ss >> f1 >> f2 >> f3 >> f4 >> f5 >> f6;
                 pos = from_fen(f1 + " " + f2 + " " + f3 + " " + f4 + " " + f5 + " " + f6);
             }
 
             std::string w;
-            if (ss >> w && w == "moves")
-            {
-                while (ss >> w)
-                {
-                    if (!apply_uci_move(pos, w))
-                    {
+            if (ss >> w && w == "moves") {
+                while (ss >> w) {
+                    if (!apply_uci_move(pos, w)) {
                         std::cout << "info string warning: illegal/unknown move " << w << "\n";
                         break;
                     }
@@ -198,17 +176,14 @@ int main()
             continue;
         }
 
-        if (line.rfind("go", 0) == 0)
-        {
+        if (line.rfind("go", 0) == 0) {
             // Modes:
             //   go perft depth N
             //   go divide depth N
             //   go depth N
-            if (line.find("perft") != std::string::npos)
-            {
+            if (line.find("perft") != std::string::npos) {
                 int depth = 1;
-                if (auto dpos = line.find("depth"); dpos != std::string::npos)
-                {
+                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
                     std::istringstream dd(line.substr(dpos + 5));
                     dd >> depth;
                 }
@@ -216,31 +191,24 @@ int main()
                 auto nodes = perft(tmp, depth);
                 std::cout << "info string perft " << depth << " nodes " << nodes << "\n";
                 std::cout << "bestmove 0000\n";
-            }
-            else if (line.find("divide") != std::string::npos)
-            {
+            } else if (line.find("divide") != std::string::npos) {
                 int depth = 1;
-                if (auto dpos = line.find("depth"); dpos != std::string::npos)
-                {
+                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
                     std::istringstream dd(line.substr(dpos + 5));
                     dd >> depth;
                 }
                 Board tmp = pos;
                 auto parts = perft_divide(tmp, depth);
                 std::uint64_t total = 0;
-                for (auto &kv : parts)
-                {
+                for (auto& kv : parts) {
                     std::cout << move_to_uci(kv.first) << ": " << kv.second << "\n";
                     total += kv.second;
                 }
                 std::cout << "Total: " << total << "\n";
                 std::cout << "bestmove 0000\n";
-            }
-            else
-            {
+            } else {
                 int depth = 5; // default if not specified
-                if (auto dpos = line.find("depth"); dpos != std::string::npos)
-                {
+                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
                     std::istringstream dd(line.substr(dpos + 5));
                     dd >> depth;
                 }
@@ -252,15 +220,11 @@ int main()
             continue;
         }
 
-        if (line.rfind("eval", 0) == 0)
-        {
-            try
-            {
+        if (line.rfind("eval", 0) == 0) {
+            try {
                 initialise_eval();
                 std::cout << "info string eval cp: " << eval::evaluate(pos) << "\n";
-            }
-            catch (...)
-            {
+            } catch (...) {
                 std::cout << "info string eval failed\n";
             }
         }

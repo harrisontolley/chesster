@@ -1,11 +1,12 @@
-#include <catch2/catch_test_macros.hpp>
 #include "fen.hh"
 #include "move.hh"
 #include "movegen.hh"
 
+#include <catch2/catch_test_macros.hpp>
+
 using namespace engine;
 
-static std::size_t count_flag(const std::vector<Move> &ms, int f)
+static std::size_t count_flag(const std::vector<Move>& ms, int f)
 {
     std::size_t n = 0;
     for (auto m : ms)
@@ -96,36 +97,33 @@ TEST_CASE("White castling both sides when clear and not attacked")
 {
     engine::Board b = engine::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
     auto ms = engine::generate_moves(b);
-    REQUIRE(std::count_if(ms.begin(), ms.end(), [](engine::Move m)
-                          { return engine::flag(m) == engine::KING_CASTLE; }) == 1);
-    REQUIRE(std::count_if(ms.begin(), ms.end(), [](engine::Move m)
-                          { return engine::flag(m) == engine::QUEEN_CASTLE; }) == 1);
+    REQUIRE(std::count_if(ms.begin(), ms.end(),
+                          [](engine::Move m) { return engine::flag(m) == engine::KING_CASTLE; }) == 1);
+    REQUIRE(std::count_if(ms.begin(), ms.end(),
+                          [](engine::Move m) { return engine::flag(m) == engine::QUEEN_CASTLE; }) == 1);
 }
 
 TEST_CASE("Castling blocked by own piece on the path (white king side)")
 {
     engine::Board b = engine::from_fen("r3k2r/8/8/8/8/8/8/R3KB1R w KQkq - 0 1");
     auto ms = engine::generate_moves(b);
-    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m)
-                         { return engine::flag(m) == engine::KING_CASTLE; }));
+    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m) { return engine::flag(m) == engine::KING_CASTLE; }));
 }
 
 TEST_CASE("Castling forbidden if king is in check (white)")
 {
     engine::Board b = engine::from_fen("r3k2r/8/8/8/1b6/8/8/R3K2R w KQkq - 0 1");
     auto ms = engine::generate_moves(b);
-    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m)
-                         { return engine::flag(m) == engine::KING_CASTLE; }));
-    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m)
-                         { return engine::flag(m) == engine::QUEEN_CASTLE; }));
+    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m) { return engine::flag(m) == engine::KING_CASTLE; }));
+    REQUIRE(std::none_of(ms.begin(), ms.end(), [](engine::Move m) { return engine::flag(m) == engine::QUEEN_CASTLE; }));
 }
 
 TEST_CASE("Black castling both sides when clear and not attacked")
 {
     engine::Board b = engine::from_fen("r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1");
     auto ms = engine::generate_moves(b);
-    REQUIRE(std::count_if(ms.begin(), ms.end(), [](engine::Move m)
-                          { return engine::flag(m) == engine::KING_CASTLE; }) == 1);
-    REQUIRE(std::count_if(ms.begin(), ms.end(), [](engine::Move m)
-                          { return engine::flag(m) == engine::QUEEN_CASTLE; }) == 1);
+    REQUIRE(std::count_if(ms.begin(), ms.end(),
+                          [](engine::Move m) { return engine::flag(m) == engine::KING_CASTLE; }) == 1);
+    REQUIRE(std::count_if(ms.begin(), ms.end(),
+                          [](engine::Move m) { return engine::flag(m) == engine::QUEEN_CASTLE; }) == 1);
 }
