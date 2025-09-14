@@ -63,18 +63,24 @@ static bool apply_uci_move(Board& pos, const std::string& uciMove)
     return false;
 }
 
-static std::string eval_file_path; // from UCI setoption
+static std::string eval_file_path;   // from UCI setoption
+static std::string last_loaded_path; // actually loaded file
+static bool eval_initialised = false;
 
 static void initialise_eval()
 {
-    static bool eval_loaded = false;
-    if (!eval_loaded) {
-        const char* p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
+    const char* p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
+
+    // reload if never loaded, or requested path differs
+    if (!eval_initialised || last_loaded_path != eval_file_path) {
         if (!eval::load_weights(p)) {
             std::cout << "info string eval: FAILED to load weights\n";
         } else {
-            std::cout << "info string eval: weights loaded\n";
-            eval_loaded = true;
+            std::cout << "info string eval: weights loaded from "
+                      << (eval_file_path.empty() ? "env CHESSTER_NET or ./CHESSTER_NET/raw.bin" : eval_file_path)
+                      << "\n";
+            last_loaded_path = eval_file_path;
+            eval_initialised = true;
         }
     }
 }
@@ -172,6 +178,16 @@ int main()
                         break;
                     }
                 }
+            }
+            continue;
+        }
+
+        if (line.rfind("evaldiag", 0) == 0) {
+            try {
+                initialise_eval();
+                eval::debug_dump(pos);
+            } catch (const std::exception& e) {
+                std::cout << "info string evaldiag error: " << e.what() << "\n";
             }
             continue;
         }

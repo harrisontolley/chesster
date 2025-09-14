@@ -65,7 +65,7 @@ Move search_best_move(Board& b, int depth)
         for (Move m : moves) {
             Undo u;
             make_move(b, m, u);
-            int score = -negamax(b, depth - 1, -beta, -alpha);
+            int score = -negamax(b, d - 1, -beta, -alpha);
             unmake_move(b, m, u);
 
             if (score > best) {
