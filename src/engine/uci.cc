@@ -6,13 +6,18 @@
 #include "move_do.hh"
 #include "movegen.hh"
 #include "perft.hh"
-#include "search.cc"
+#include "search.hh"
 
+#include <cmath>
 #include <iostream>
 #include <sstream>
 #include <string>
 
 using namespace engine;
+static std::string eval_file_path;   // from UCI setoption
+static std::string last_loaded_path; // actually loaded file
+static bool eval_initialised = false;
+static int move_overhead_ms = 80;
 
 static std::string sq_to_str(int sq)
 {
@@ -63,10 +68,6 @@ static bool apply_uci_move(Board& pos, const std::string& uciMove)
     return false;
 }
 
-static std::string eval_file_path;   // from UCI setoption
-static std::string last_loaded_path; // actually loaded file
-static bool eval_initialised = false;
-
 static void initialise_eval()
 {
     const char* p = eval_file_path.empty() ? nullptr : eval_file_path.c_str();
@@ -98,11 +99,14 @@ int main()
     std::cin.tie(&std::cout);
 
     uci_print_id();
+
     // Advertise UCI options
     std::cout << "option name EvalFile type string default (use setoption or CHESSTER_NET/raw.bin)\n";
+    std::cout << "option name MoveOverhead type spin default 80 min 0 max 5000\n";
     std::cout << "uciok\n";
 
     Board pos = Board::startpos();
+    initialise_eval();
 
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -112,27 +116,29 @@ int main()
         if (line == "uci") {
             uci_print_id();
             std::cout << "option name EvalFile type string default (use setoption or CHESSTER_NET/raw.bin)\n";
+            std::cout << "option name MoveOverhead type spin default 80 min 0 max 5000\n";
             std::cout << "uciok\n";
             continue;
         }
 
         if (line.rfind("setoption", 0) == 0) {
-            // setoption name EvalFile value /path/to/checkpoint_or_raw.bin
             std::istringstream ss(line);
             std::string w, name, key, value;
             ss >> w;    // setoption
             ss >> w;    // name
-            ss >> name; // EvalFile or others
+            ss >> name; // EvalFile / MoveOverhead / ...
             if (name == "EvalFile") {
-                // consume "value" and the rest as path (can contain spaces)
                 ss >> w; // value
                 std::getline(ss, value);
-                // trim leading spaces
                 while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
                     value.erase(value.begin());
                 eval_file_path = value;
-                // force re-load next isready
-                // (simplest: clear the flag by re-calling load on next isready)
+            } else if (name == "MoveOverhead") {
+                ss >> w; // value
+                int v = 0;
+                ss >> v;
+                if (v >= 0 && v <= 5000)
+                    move_overhead_ms = v;
             }
             continue;
         }
@@ -193,46 +199,96 @@ int main()
         }
 
         if (line.rfind("go", 0) == 0) {
-            // Modes:
-            //   go perft depth N
-            //   go divide depth N
-            //   go depth N
-            if (line.find("perft") != std::string::npos) {
-                int depth = 1;
-                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
-                    std::istringstream dd(line.substr(dpos + 5));
-                    dd >> depth;
+            // Supported: depth N | movetime X | wtime/btime[/winc/binc[/movestogo]]
+            int depth = -1, movetime = -1;
+            long wtime = -1, btime = -1, winc = 0, binc = 0;
+            int movestogo = 0; // 0 means unknown
+
+            {
+                std::istringstream ss(line);
+                std::string tok;
+                ss >> tok; // "go"
+                while (ss >> tok) {
+                    if (tok == "depth") {
+                        ss >> depth;
+                    } else if (tok == "movetime") {
+                        ss >> movetime;
+                    } else if (tok == "wtime") {
+                        ss >> wtime;
+                    } else if (tok == "btime") {
+                        ss >> btime;
+                    } else if (tok == "winc") {
+                        ss >> winc;
+                    } else if (tok == "binc") {
+                        ss >> binc;
+                    } else if (tok == "movestogo") {
+                        ss >> movestogo;
+                    }
+                    // ignore: nodes/infinite/ponder/searchmoves for now
                 }
-                Board tmp = pos;
-                auto nodes = perft(tmp, depth);
-                std::cout << "info string perft " << depth << " nodes " << nodes << "\n";
-                std::cout << "bestmove 0000\n";
-            } else if (line.find("divide") != std::string::npos) {
-                int depth = 1;
-                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
-                    std::istringstream dd(line.substr(dpos + 5));
-                    dd >> depth;
-                }
-                Board tmp = pos;
-                auto parts = perft_divide(tmp, depth);
-                std::uint64_t total = 0;
-                for (auto& kv : parts) {
-                    std::cout << move_to_uci(kv.first) << ": " << kv.second << "\n";
-                    total += kv.second;
-                }
-                std::cout << "Total: " << total << "\n";
-                std::cout << "bestmove 0000\n";
-            } else {
-                int depth = 5; // default if not specified
-                if (auto dpos = line.find("depth"); dpos != std::string::npos) {
-                    std::istringstream dd(line.substr(dpos + 5));
-                    dd >> depth;
-                }
-                Board tmp = pos; // search works on a copy
-                Move bm = search_best_move(tmp, depth);
-                std::string u = bm ? move_to_uci(bm) : "0000";
-                std::cout << "bestmove " << u << "\n";
             }
+
+            auto side = pos.side_to_move;
+            long time_left = (side == WHITE ? wtime : btime);
+            long inc = (side == WHITE ? winc : binc);
+
+            auto clamp_ms = [](long x) { return x < 0 ? 0 : x; };
+
+            long soft_ms = 0, hard_ms = 0;
+            int maxDepth = (depth > 0 ? depth : 99);
+
+            if (movetime >= 0) {
+                // “move by” budget
+                long t = clamp_ms(movetime - move_overhead_ms);
+                soft_ms = t;
+                hard_ms = std::max<long>(t - move_overhead_ms / 2, t); // same or a hair smaller
+            } else if (time_left >= 0) {
+                // Generic per-move split:
+                //   base = time_left - overhead
+                //   mtg  = advertised movestogo or assume ~40 moves remaining
+                //   soft ~ base/(mtg+3) + 0.6*inc
+                //   hard clamps to min(base*0.7, base - overhead)
+                long base = clamp_ms(time_left - move_overhead_ms);
+                int mtg = movestogo > 0 ? movestogo : 40;
+
+                // soft: small slice + some of the increment
+                long soft = (long)std::llround((double)base / (mtg + 6) + 0.60 * (double)inc);
+
+                // cap soft to ≤ 25% of remaining bank, and set a small floor
+                long soft_cap = base / 4; // 25%
+                soft = std::max(5L, std::min(soft, soft_cap));
+
+                // hard: just above soft, with an absolute 30% bank ceiling
+                long hard = soft + std::max(5L, static_cast<long>(move_overhead_ms / 2));
+                long hard_bank_cap = (long)(base * 0.30);
+                hard = std::min(hard, hard_bank_cap);
+
+                // never exceed base - overhead
+                hard = std::min(hard, clamp_ms(base - move_overhead_ms));
+
+                // sanity: soft <= hard
+                soft = std::min(soft, std::max(soft, hard - 1));
+
+                // ensure sanity
+                soft_ms = soft;
+                hard_ms = hard;
+            } else if (depth > 0) {
+                // pure fixed depth
+                soft_ms = hard_ms = 0;
+            } else {
+                // fallback when nothing is given
+                maxDepth = 10;
+            }
+
+            Board tmp = pos; // search on a copy
+            Move bm;
+            if (soft_ms > 0 || hard_ms > 0)
+                bm = search_best_move_timed(tmp, maxDepth, (int)soft_ms, (int)hard_ms);
+            else
+                bm = search_best_move(tmp, maxDepth > 0 ? maxDepth : 10);
+
+            std::string u = bm ? move_to_uci(bm) : "0000";
+            std::cout << "bestmove " << u << "\n";
             continue;
         }
 
