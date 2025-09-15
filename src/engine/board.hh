@@ -2,6 +2,7 @@
 #include "bitboard.hh"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 
 namespace engine {
@@ -26,6 +27,9 @@ struct Board {
     int fullmove_number{1};
 
     static Board startpos();
+
+    // zobrist key
+    std::uint64_t zkey() const;
 };
 
 inline Bitboard occupancy(const Board& b, Colour c)

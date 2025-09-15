@@ -1,5 +1,7 @@
 #include "board.hh"
 
+#include "zobrist.hh"
+
 namespace engine {
 
 Board Board::startpos()
@@ -24,5 +26,10 @@ Board Board::startpos()
 
     b.side_to_move = WHITE;
     return b;
+}
+
+std::uint64_t Board::zkey() const
+{
+    return zobrist::compute(*this);
 }
 } // namespace engine
