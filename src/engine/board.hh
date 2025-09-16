@@ -29,6 +29,7 @@ struct Board {
     static Board startpos();
 
     // zobrist key
+    std::uint64_t zkey_{0};
     std::uint64_t zkey() const;
 };
 

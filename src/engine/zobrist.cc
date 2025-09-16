@@ -104,5 +104,55 @@ std::uint64_t compute(const Board& b)
     return k;
 }
 
+std::uint64_t psq(Colour c, Piece p, int sq)
+{
+    ensure_init();
+    return Z_PSQ[c][p][sq];
+}
+std::uint64_t side()
+{
+    ensure_init();
+    return Z_SIDE;
+}
+
+std::uint64_t castle_mask(const CastlingRights& cr)
+{
+    ensure_init();
+    std::uint64_t k = 0;
+    if (cr.wk)
+        k ^= Z_CASTLE_WK;
+    if (cr.wq)
+        k ^= Z_CASTLE_WQ;
+    if (cr.bk)
+        k ^= Z_CASTLE_BK;
+    if (cr.bq)
+        k ^= Z_CASTLE_BQ;
+    return k;
+}
+
+std::uint64_t ep_file(int file)
+{
+    ensure_init();
+    return Z_EP_FILE[file & 7];
+}
+
+std::uint64_t ep_component(const Board& b, Colour stm)
+{
+    ensure_init();
+    if (!b.ep_square)
+        return 0ULL;
+    const int eps = *b.ep_square;
+    const Bitboard target = 1ULL << eps;
+
+    if (stm == WHITE) {
+        if ((se(target) & b.pieces[WHITE][PAWN]) || (sw(target) & b.pieces[WHITE][PAWN]))
+            return Z_EP_FILE[eps & 7];
+    } else {
+        if ((ne(target) & b.pieces[BLACK][PAWN]) || (nw(target) & b.pieces[BLACK][PAWN]))
+            return Z_EP_FILE[eps & 7];
+    }
+    return 0ULL;
+}
+
 } // namespace zobrist
 } // namespace engine

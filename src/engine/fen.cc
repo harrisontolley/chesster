@@ -1,5 +1,7 @@
 #include "fen.hh"
 
+#include "zobrist.hh"
+
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
@@ -86,6 +88,9 @@ Board from_fen(const std::string& fen)
 
     b.halfmove_clock = half;
     b.fullmove_number = full;
+
+    b.zkey_ = zobrist::compute(b);
+
     return b;
 }
 

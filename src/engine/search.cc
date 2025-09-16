@@ -15,12 +15,94 @@
 
 namespace engine {
 
-// -------- Time & accounting --------
 using clock = std::chrono::steady_clock;
 static clock::time_point g_start;
 static int g_soft_ms = 0;
 static int g_hard_ms = 0;
 static std::atomic<std::uint64_t> g_nodes{0};
+
+enum : uint8_t { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
+struct TTEntry {
+    std::uint64_t key = 0;   // zobrist key -- 8 bytes
+    Move best = 0;           // best/PV move (if known) -- 2 bytes
+    int score = 0;           // stored score in cp -- 4 bytes
+    int16_t depth = -1;      // search depth remaining when stored -- 2 bytes
+    uint8_t flag = TT_EMPTY; // EXACT/LOWER/UPPER -- 1 byte
+    uint8_t _pad = 0;        // padding -- 1 byte
+    // 18 bytes total + padding
+};
+
+static constexpr std::size_t TT_LOG2 = 24;
+static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
+static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
+static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
+
+static inline std::uint64_t pos_key(const Board& b)
+{
+    return b.zkey();
+}
+
+static inline TTEntry& tt_slot(std::uint64_t key)
+{
+    return g_tt[key & TT_MASK];
+}
+
+// Probe: returns true iff entry can be used to cut or exact return.
+// always returns a move hint (outBest) if present, even if not cut-usable.
+static inline bool tt_probe(const Board& b, int depth, int alpha, int beta, int& outScore, Move& outBest)
+{
+    const std::uint64_t k = pos_key(b);
+    TTEntry& e = tt_slot(k);
+
+    // if entry at idx does not match key, or is empty
+    if (e.key != k || e.flag == TT_EMPTY) {
+        return false;
+    }
+
+    if (e.best)
+        outBest = e.best;
+
+    // searched this position deeper (or equal) previously
+    if (e.depth >= depth) {
+        if (e.flag == TT_EXACT) {
+            outScore = e.score;
+            return true;
+        }
+
+        if (e.flag == TT_LOWER && e.score >= beta) {
+            outScore = e.score;
+            return true;
+        }
+
+        if (e.flag == TT_UPPER && e.score <= alpha) {
+            outScore = e.score;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Store or replace an entry (unconditional). Replace if depth is greater/equal.
+static inline void tt_store(const Board& b, int depth, int score, uint8_t flag, Move best)
+{
+    const std::uint64_t k = pos_key(b);
+    TTEntry& e = tt_slot(k);
+    if (e.flag == TT_EMPTY || e.key != k || e.depth <= depth) {
+        e.key = k;
+        e.best = best;
+        e.score = score;
+        e.depth = static_cast<int16_t>(depth);
+        e.flag = flag;
+    }
+}
+
+// helper for between game clears
+[[maybe_unused]] static inline void tt_clear()
+{
+    for (std::size_t i = 0; i < TT_SIZE; ++i) {
+        g_tt[i] = TTEntry{};
+    }
+}
 
 static inline bool time_enabled()
 {
@@ -32,13 +114,13 @@ static inline bool past_soft()
     return time_enabled() &&
            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - g_start).count() >= g_soft_ms;
 }
+
 static inline bool past_hard()
 {
     return time_enabled() &&
            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - g_start).count() >= g_hard_ms;
 }
 
-// -------- Minimal UCI helpers (internal linkage) --------
 static std::string sq_to_str(int sq)
 {
     if (sq < 0 || sq > 63)
@@ -47,6 +129,7 @@ static std::string sq_to_str(int sq)
     char r = char('1' + (sq >> 3));
     return std::string() + f + r;
 }
+
 static std::string move_to_uci(Move m)
 {
     std::string s = sq_to_str(from_sq(m)) + sq_to_str(to_sq(m));
@@ -73,30 +156,73 @@ static std::string move_to_uci(Move m)
     return s;
 }
 
-// -------- Core search --------
+static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
+{
+    Move ttBest = 0;
+    int dummy;
+    (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
+
+    if (ttBest) {
+        // move ttBest to front
+        auto it = std::find(moves.begin(), moves.end(), ttBest);
+        if (it != moves.end())
+            std::rotate(moves.begin(), it, it + 1);
+    } else {
+        // Naive ordering: captures first
+        // TODO: better heuristics
+        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
+            const bool ca = is_capture(a), cb = is_capture(b);
+            if (ca != cb)
+                return ca > cb;
+            return a < b;
+        });
+    }
+}
+
+// Core search
 static inline int negamax(Board& b, int depth, int alpha, int beta)
 {
     g_nodes.fetch_add(1, std::memory_order_relaxed);
 
+    const int alpha_orig = alpha;
+
     // Cheap periodic time test
     static thread_local int check_counter = 0;
     if (time_enabled()) {
+        // every 32 nodes check if we have exceeded maximum allowable time.
         if ((++check_counter & 31) == 0 && past_hard()) {
             // Out of time: return static eval as a bounded fallback
             return eval::evaluate(b);
         }
     }
 
-    if (depth == 0)
-        return eval::evaluate(b);
+    // TT probe (try cut / exact return)
+    {
+        int tScore;
+        Move tBest = 0;
+        if (tt_probe(b, depth, alpha, beta, tScore, tBest))
+            return tScore;
+    }
+
+    if (depth == 0) {
+        const int val = eval::evaluate(b);
+        tt_store(b, 0, val, TT_EXACT, 0);
+        return val;
+    }
 
     int best = std::numeric_limits<int>::min() / 2;
-    std::vector<Move> moves = generate_legal_moves(b);
+    Move bestMove = 0;
 
+    std::vector<Move> moves = generate_legal_moves(b);
     if (moves.empty()) {
         // Mate/stalemate are handled by static eval
-        return eval::evaluate(b);
+        const int val = eval::evaluate(b);
+        tt_store(b, depth, val, TT_EXACT, 0);
+        return val;
     }
+
+    // Move ordering: try TT best move first if available
+    order_moves_tt_first(b, moves);
 
     for (Move m : moves) {
         Undo u;
@@ -104,13 +230,29 @@ static inline int negamax(Board& b, int depth, int alpha, int beta)
         int score = -negamax(b, depth - 1, -beta, -alpha);
         unmake_move(b, m, u);
 
-        if (score > best)
+        if (score > best) {
             best = score;
-        if (best > alpha)
+            bestMove = m;
+        }
+
+        if (best > alpha) {
             alpha = best;
+        }
+
         if (alpha >= beta)
             break; // alpha-beta cutoff
+
+        if (time_enabled() && past_hard())
+            break; // hit hard wall mid-iteration
     }
+
+    // Store to TT
+    uint8_t flag = TT_EXACT;
+    if (best <= alpha_orig)
+        flag = TT_UPPER;
+    else if (best >= beta)
+        flag = TT_LOWER;
+    tt_store(b, depth, best, flag, bestMove);
 
     return best;
 }
@@ -124,20 +266,17 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     g_nodes = 0;
 
     Move best_move = 0;
-    int alpha = -30000, beta = 30000;
 
     for (int d = 1; d <= maxDepth; ++d) {
+        int alpha = -30000, beta = 30000;
+
         int best = std::numeric_limits<int>::min() / 2;
         Move local_best = 0;
 
         std::vector<Move> moves = generate_legal_moves(b);
-        // Naive ordering: captures first
-        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
-            const bool ca = is_capture(a), cb = is_capture(b);
-            if (ca != cb)
-                return ca > cb;
-            return a < b;
-        });
+
+        // Try TT move first; else captures-first
+        order_moves_tt_first(b, moves);
 
         for (Move m : moves) {
             if (time_enabled() && past_soft())
@@ -185,19 +324,17 @@ Move search_best_move(Board& b, int depth)
     g_nodes = 0;
 
     Move best_move = 0;
-    int alpha = -30000, beta = 30000;
 
     for (int d = 1; d <= depth; ++d) {
+        int alpha = -30000, beta = 30000;
+
         int best = std::numeric_limits<int>::min() / 2;
         Move local_best = 0;
 
         std::vector<Move> moves = generate_legal_moves(b);
-        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
-            const bool ca = is_capture(a), cb = is_capture(b);
-            if (ca != cb)
-                return ca > cb;
-            return a < b;
-        });
+
+        // Try TT move first; else captures-first
+        order_moves_tt_first(b, moves);
 
         for (Move m : moves) {
             Undo u;

@@ -2,6 +2,7 @@
 
 #include "attack_tables.hh"
 #include "bitboard.hh"
+#include "zobrist.hh"
 
 #include <cassert>
 
@@ -128,13 +129,26 @@ void make_move(Board& b, Move m, Undo& u)
     u.captured_piece = NO_PIECE;
     u.moved_piece = piece_at(b, us, from);
 
+    // Update Zobrist key for removed EP square (if any & capturable)
+    b.zkey_ ^= zobrist::ep_component(b, us);
+
+    // remove current castling rights
+    b.zkey_ ^= zobrist::castle_mask(b.castle);
+
     assert(u.moved_piece != NO_PIECE && "No piece on from-square");
 
     // defaults
     b.ep_square.reset();
 
-    auto remove_piece = [&](Colour c, Piece p, int sq) { bb_clear(b.pieces[c][p], sq); };
-    auto add_piece = [&](Colour c, Piece p, int sq) { bb_set(b.pieces[c][p], sq); };
+    // Piece XOR helpers that also update bitboards and the Zobrist key
+    auto remove_piece = [&](Colour c, Piece p, int sq) {
+        bb_clear(b.pieces[c][p], sq);
+        b.zkey_ ^= zobrist::psq(c, p, sq);
+    };
+    auto add_piece = [&](Colour c, Piece p, int sq) {
+        bb_set(b.pieces[c][p], sq);
+        b.zkey_ ^= zobrist::psq(c, p, sq);
+    };
 
     // Handle captures first (incl. promo captures & EP)
     bool any_capture = false;
@@ -196,8 +210,9 @@ void make_move(Board& b, Move m, Undo& u)
             }
             b.castle.bk = b.castle.bq = false;
         }
-    } else if (fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
-               fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
+    } else if (
+            fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
+            fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
         assert(u.moved_piece == PAWN);
         add_piece(us, flag_to_promo_piece(fl), to);
     } else {
@@ -226,6 +241,9 @@ void make_move(Board& b, Move m, Undo& u)
         }
     }
 
+    // Update Zobrist key for new castling rights
+    b.zkey_ ^= zobrist::castle_mask(b.castle);
+
     // 50-move clock
     if (u.moved_piece == PAWN || any_capture)
         b.halfmove_clock = 0;
@@ -235,7 +253,12 @@ void make_move(Board& b, Move m, Undo& u)
     // move number and side to move
     if (us == BLACK)
         b.fullmove_number += 1;
+
+    b.zkey_ ^= zobrist::side();
     b.side_to_move = them;
+
+    // Update Zobrist key for new EP square (if any & capturable)
+    b.zkey_ ^= zobrist::ep_component(b, b.side_to_move);
 }
 
 void unmake_move(Board& b, Move m, Undo& u)
@@ -246,8 +269,23 @@ void unmake_move(Board& b, Move m, Undo& u)
     const int to = to_sq(m);
     const int fl = flag(m);
 
-    auto remove_piece = [&](Colour c, Piece p, int sq) { bb_clear(b.pieces[c][p], sq); };
-    auto add_piece = [&](Colour c, Piece p, int sq) { bb_set(b.pieces[c][p], sq); };
+    // remove current EP (belongs to them as they are to move now)
+    b.zkey_ ^= zobrist::ep_component(b, them);
+
+    // remove current castling rights
+    b.zkey_ ^= zobrist::castle_mask(b.castle);
+
+    // toggle side (back to 'us')
+    b.zkey_ ^= zobrist::side();
+
+    auto remove_piece = [&](Colour c, Piece p, int sq) {
+        bb_clear(b.pieces[c][p], sq);
+        b.zkey_ ^= zobrist::psq(c, p, sq);
+    };
+    auto add_piece = [&](Colour c, Piece p, int sq) {
+        bb_set(b.pieces[c][p], sq);
+        b.zkey_ ^= zobrist::psq(c, p, sq);
+    };
 
     // Restore side and counters/rights/ep
     b.side_to_move = us;
@@ -255,6 +293,9 @@ void unmake_move(Board& b, Move m, Undo& u)
     b.castle = u.castle_prev;
     b.halfmove_clock = u.halfmove_prev;
     b.fullmove_number = u.fullmove_prev;
+
+    // add previous castling rights
+    b.zkey_ ^= zobrist::castle_mask(b.castle);
 
     // Undo placement
     if (fl == KING_CASTLE || fl == QUEEN_CASTLE) {
@@ -278,8 +319,9 @@ void unmake_move(Board& b, Move m, Undo& u)
                 add_piece(BLACK, ROOK, A8);
             }
         }
-    } else if (fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
-               fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
+    } else if (
+            fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
+            fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
         // remove promoted piece from 'to', restore pawn on 'from'
         Piece pp;
         switch (fl) {
@@ -315,5 +357,8 @@ void unmake_move(Board& b, Move m, Undo& u)
             add_piece((us == WHITE) ? BLACK : WHITE, u.captured_piece, to);
         }
     }
+
+    // Update Zobrist key for restored EP square (if any & capturable)
+    b.zkey_ ^= zobrist::ep_component(b, b.side_to_move);
 }
 } // namespace engine

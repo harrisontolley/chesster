@@ -26,10 +26,13 @@ Board Board::startpos()
 
     b.side_to_move = WHITE;
     return b;
+
+    zobrist::init();
+    b.zkey_ = zobrist::compute(b);
 }
 
 std::uint64_t Board::zkey() const
 {
-    return zobrist::compute(*this);
+    return zkey_;
 }
 } // namespace engine
