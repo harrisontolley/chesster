@@ -3,9 +3,24 @@ IndentWidth: 4
 TabWidth: 4
 UseTab: Never
 ColumnLimit: 120
+
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterFunction: true
+
+# --- Key bits for parameters ---
+AlignAfterOpenBracket: AlwaysBreak # put first param on a new line
+BinPackParameters: false # one parameter per line (not all packed)
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# Optional: do the same for CALLS
+BinPackArguments: false
+AllowAllArgumentsOnNextLine: false
+PenaltyBreakBeforeFirstCallParameter: 1
+
+# Visual indentation for wrapped lines
+ContinuationIndentWidth: 8
+
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
