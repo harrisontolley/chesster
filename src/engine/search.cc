@@ -15,12 +15,24 @@
 
 namespace engine {
 
+static constexpr int MATE_SCORE = 30000;
+static inline int mate_in(int ply)
+{
+    return MATE_SCORE - ply;
+}
+static inline int mated_in(int ply)
+{
+    return -MATE_SCORE + ply;
+}
+
+// time management statics
 using clock = std::chrono::steady_clock;
 static clock::time_point g_start;
 static int g_soft_ms = 0;
 static int g_hard_ms = 0;
 static std::atomic<std::uint64_t> g_nodes{0};
 
+// transposition table
 enum : uint8_t { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
 struct TTEntry {
     std::uint64_t key = 0;   // zobrist key -- 8 bytes
@@ -32,10 +44,18 @@ struct TTEntry {
     // 18 bytes total + padding
 };
 
-static constexpr std::size_t TT_LOG2 = 24;
+static constexpr std::size_t TT_LOG2 = 22;
 static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
 static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
 static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
+
+static inline bool in_check(const Board& b)
+{
+    const Colour us = b.side_to_move;
+    const Colour them = (us == WHITE ? BLACK : WHITE);
+    int ksq = king_sq(b, us);
+    return ksq >= 0 && is_square_attacked(b, ksq, them);
+}
 
 static inline std::uint64_t pos_key(const Board& b)
 {
@@ -97,10 +117,33 @@ static inline void tt_store(const Board& b, int depth, int score, uint8_t flag, 
 }
 
 // helper for between game clears
-[[maybe_unused]] static inline void tt_clear()
+void tt_clear()
 {
     for (std::size_t i = 0; i < TT_SIZE; ++i) {
         g_tt[i] = TTEntry{};
+    }
+}
+
+static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
+{
+    Move ttBest = 0;
+    int dummy;
+    (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
+
+    if (ttBest) {
+        // move ttBest to front
+        auto it = std::find(moves.begin(), moves.end(), ttBest);
+        if (it != moves.end())
+            std::rotate(moves.begin(), it, it + 1);
+    } else {
+        // Naive ordering: captures first
+        // TODO: better heuristics
+        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
+            const bool ca = is_capture(a), cb = is_capture(b);
+            if (ca != cb)
+                return ca > cb;
+            return a < b;
+        });
     }
 }
 
@@ -156,31 +199,50 @@ static std::string move_to_uci(Move m)
     return s;
 }
 
-static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
+// Quiesence search (captures and promotions only)
+static inline int qsearch(Board& b, int alpha, int beta)
 {
-    Move ttBest = 0;
-    int dummy;
-    (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
+    g_nodes.fetch_add(1, std::memory_order_relaxed);
 
-    if (ttBest) {
-        // move ttBest to front
-        auto it = std::find(moves.begin(), moves.end(), ttBest);
-        if (it != moves.end())
-            std::rotate(moves.begin(), it, it + 1);
-    } else {
-        // Naive ordering: captures first
-        // TODO: better heuristics
-        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
-            const bool ca = is_capture(a), cb = is_capture(b);
-            if (ca != cb)
-                return ca > cb;
-            return a < b;
-        });
+    if (time_enabled()) {
+        static thread_local int tick = 0;
+        if ((++tick & 31) == 0 && past_hard())
+            return eval::evaluate(b);
     }
+
+    int stand = eval::evaluate(b);
+    if (stand >= beta)
+        return stand;
+    if (stand > alpha)
+        alpha = stand;
+
+    std::vector<Move> moves = generate_legal_moves(b);
+    for (Move m : moves) {
+        const int fl = flag(m);
+        const bool isPromo =
+                (fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
+                 fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE);
+
+        // only consider captures and promotions
+        if (!(is_capture(m) || isPromo))
+            continue;
+
+        Undo u;
+        make_move(b, m, u);
+        int score = -qsearch(b, -beta, -alpha);
+        unmake_move(b, m, u);
+
+        if (score >= beta)
+            return score;
+        if (score > alpha)
+            alpha = score;
+    }
+
+    return alpha;
 }
 
 // Core search
-static inline int negamax(Board& b, int depth, int alpha, int beta)
+static inline int negamax(Board& b, int depth, int alpha, int beta, int ply)
 {
     g_nodes.fetch_add(1, std::memory_order_relaxed);
 
@@ -204,21 +266,23 @@ static inline int negamax(Board& b, int depth, int alpha, int beta)
             return tScore;
     }
 
-    if (depth == 0) {
-        const int val = eval::evaluate(b);
-        tt_store(b, 0, val, TT_EXACT, 0);
-        return val;
-    }
+    // quick draws
+    if (b.halfmove_clock >= 100)
+        return 0;
+
+    // quiescence to check for captures if depth exhausted
+    if (depth == 0)
+        return qsearch(b, alpha, beta);
 
     int best = std::numeric_limits<int>::min() / 2;
     Move bestMove = 0;
 
     std::vector<Move> moves = generate_legal_moves(b);
     if (moves.empty()) {
-        // Mate/stalemate are handled by static eval
-        const int val = eval::evaluate(b);
-        tt_store(b, depth, val, TT_EXACT, 0);
-        return val;
+        // checkmate or stalemate
+        int out = in_check(b) ? mated_in(ply) : 0;
+        tt_store(b, depth, out, TT_EXACT, 0);
+        return out;
     }
 
     // Move ordering: try TT best move first if available
@@ -227,7 +291,7 @@ static inline int negamax(Board& b, int depth, int alpha, int beta)
     for (Move m : moves) {
         Undo u;
         make_move(b, m, u);
-        int score = -negamax(b, depth - 1, -beta, -alpha);
+        int score = -negamax(b, depth - 1, -beta, -alpha, ply + 1);
         unmake_move(b, m, u);
 
         if (score > best) {
@@ -284,7 +348,7 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
 
             Undo u;
             make_move(b, m, u);
-            int score = -negamax(b, d - 1, -beta, -alpha);
+            int score = -negamax(b, d - 1, -beta, -alpha, 1);
             unmake_move(b, m, u);
 
             if (score > best) {
@@ -339,7 +403,7 @@ Move search_best_move(Board& b, int depth)
         for (Move m : moves) {
             Undo u;
             make_move(b, m, u);
-            int score = -negamax(b, d - 1, -beta, -alpha);
+            int score = -negamax(b, d - 1, -beta, -alpha, 1);
             unmake_move(b, m, u);
 
             if (score > best) {
@@ -355,7 +419,7 @@ Move search_best_move(Board& b, int depth)
 
         // UCI info line (depth complete)
         using namespace std::chrono;
-        auto ms = duration_cast<milliseconds>(clock::now() - g_start).count();
+        auto ms = duration_cast<milliseconds>(clock::now() - start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
         long nps = ms > 0 ? static_cast<long>((nodes * 1000) / ms) : 0;
         std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "

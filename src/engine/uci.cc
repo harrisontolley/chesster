@@ -314,7 +314,7 @@ int main()
 
         if (line.rfind("ucinewgame", 0) == 0) {
             pos = Board::startpos();
-            tt_clear();
+            engine::tt_clear();
             continue;
         }
 
