@@ -280,7 +280,7 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
 
         for (Move m : moves) {
             if (time_enabled() && past_soft())
-                break; // don't start new branches past soft
+                break; // don't start new branches past soft time cutoff
 
             Undo u;
             make_move(b, m, u);
@@ -353,7 +353,9 @@ Move search_best_move(Board& b, int depth)
         if (local_best)
             best_move = local_best;
 
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count();
+        // UCI info line (depth complete)
+        using namespace std::chrono;
+        auto ms = duration_cast<milliseconds>(clock::now() - g_start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
         long nps = ms > 0 ? static_cast<long>((nodes * 1000) / ms) : 0;
         std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "
