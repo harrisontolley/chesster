@@ -6,7 +6,7 @@ namespace engine {
 
 Board Board::startpos()
 {
-    Board b;
+    Board b{};
 
     /* White pieces */
     b.pieces[WHITE][PAWN] = 0x000000000000FF00ULL;
@@ -25,10 +25,10 @@ Board Board::startpos()
     b.pieces[BLACK][KING] = 0x1000000000000000ULL;
 
     b.side_to_move = WHITE;
-    return b;
-
     zobrist::init();
     b.zkey_ = zobrist::compute(b);
+
+    return b;
 }
 
 std::uint64_t Board::zkey() const
