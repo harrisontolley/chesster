@@ -286,6 +286,7 @@ int main()
     // Ties cin to cout (before any cin read, cout is flushed).
     std::cin.tie(&std::cout);
 
+    // initialise UCI
     uci_print_id();
     Board pos = Board::startpos();
 

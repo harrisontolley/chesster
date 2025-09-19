@@ -1,4 +1,5 @@
 #include "../engine/board.hh"
+#include "../engine/move.hh"
 #include "eval.hh"
 
 #include <algorithm>
@@ -17,8 +18,7 @@
 
 namespace eval {
 
-// -------------------------- Model state --------------------------
-
+// Model state
 static int H = 0;          // hidden size
 static bool READY = false; // weights loaded?
 static bool IS_Q = false;  // quantised path?
@@ -41,8 +41,6 @@ static int16_t L1B_q = 0;
 
 static const char* LOADED_FORMAT = "unknown";
 
-// -------------------------- Helpers --------------------------
-
 static inline float screlu_float(float x)
 {
     if (x <= 0.0f)
@@ -53,14 +51,13 @@ static inline float screlu_float(float x)
 }
 
 // Square Clipped ReLU for quantised path (matches Rust)
-static inline int32_t screlu_i16(int16_t x)
+static inline int32_t screlu_i16(int32_t x)
 {
-    int32_t y = (int32_t)x;
-    if (y < 0)
-        y = 0;
-    if (y > QA)
-        y = QA;
-    return y * y; // i32
+    if (x < 0)
+        x = 0;
+    if (x > QA)
+        x = QA;
+    return x * x; // i32
 }
 
 static inline int flip_rank(int s)
@@ -70,30 +67,44 @@ static inline int flip_rank(int s)
     return (7 - r) * 8 + f;
 }
 
-// Build **all** feature indices for a reference colour `ref`.
-// Planes 0..5 = us (c==ref), 6..11 = them (c!=ref).
-// Square normalization: flip whole board ranks when ref==BLACK.
-static void fill_indices_all(const engine::Board& b, engine::Colour ref, std::vector<int>& idx)
+static inline int feature_index(engine::Colour ref, engine::Colour pieceSide, int piece, int sq)
 {
-    idx.clear();
-    idx.reserve(40);
+    // Planes 0...5 = us (c == ref), 6...11 = them
+    const int sideBase = (pieceSide == ref) ? 0 : 6;
+    const int base = (sideBase + piece) * 64;
+    const int sq_norm = (ref == engine::BLACK) ? flip_rank(sq) : sq;
+    return base + sq_norm; // 0 ... 768*H-1 after multiplying by H when indexing columns
+}
 
-    const bool flip_all = (ref == engine::BLACK);
+// quick piece lookup (no branching on NO_PIECE callers)
+static inline engine::Piece piece_on(const engine::Board& b, engine::Colour c, int sq)
+{
+    engine::Bitboard mask = (1ULL << sq);
+    for (int p = engine::PAWN; p <= engine::KING; ++p) {
+        if (b.pieces[c][p] & mask)
+            return static_cast<engine::Piece>(p);
+    }
+    return engine::NO_PIECE;
+}
 
-    for (int c = engine::WHITE; c <= engine::BLACK; ++c) {
-        const int sideBase = (c == ref) ? 0 : 6;
-        for (int p = engine::PAWN; p <= engine::KING; ++p) {
-            engine::Bitboard bb = b.pieces[c][p];
-            if (!bb)
-                continue;
-            const int base = (sideBase + p) * 64;
-            while (bb) {
-                int sq = __builtin_ctzll(bb);
-                bb &= (bb - 1);
-                int sq_norm = flip_all ? flip_rank(sq) : sq;
-                idx.push_back(base + sq_norm);
-            }
-        }
+static inline engine::Piece promo_piece_from_flag(int fl)
+{
+    using namespace engine;
+    switch (fl) {
+    case engine::PROMO_N:
+    case engine::PROMO_N_CAPTURE:
+        return KNIGHT;
+    case engine::PROMO_B:
+    case engine::PROMO_B_CAPTURE:
+        return BISHOP;
+    case engine::PROMO_R:
+    case engine::PROMO_R_CAPTURE:
+        return ROOK;
+    case engine::PROMO_Q:
+    case engine::PROMO_Q_CAPTURE:
+        return QUEEN;
+    default:
+        return engine::NO_PIECE;
     }
 }
 
@@ -114,13 +125,17 @@ static bool slurp_file(const std::string& p, std::vector<char>& bytes)
     std::ifstream in(p, std::ios::binary);
     if (!in)
         return false;
+
     in.seekg(0, std::ios::end);
     std::streamoff len = in.tellg();
+
     if (len <= 0)
         return false;
+
     in.seekg(0, std::ios::beg);
     bytes.resize((std::size_t)len);
     in.read(bytes.data(), len);
+
     return (bool)in;
 }
 
@@ -131,6 +146,7 @@ static std::vector<std::string> candidate_paths(const char* path)
     auto add_common = [&](const std::string& base) {
         if (base.empty())
             return;
+
         out.push_back(base);              // exact
         out.push_back(base + ".bin");     // add .bin if omitted
         out.push_back(base + "/raw.bin"); // directory raw.bin
@@ -139,6 +155,7 @@ static std::vector<std::string> candidate_paths(const char* path)
         std::string bn = base;
         while (!bn.empty() && (bn.back() == '/' || bn.back() == '\\'))
             bn.pop_back();
+
         auto pos = bn.find_last_of("/\\");
         std::string leaf = (pos == std::string::npos) ? bn : bn.substr(pos + 1);
         if (!leaf.empty())
@@ -155,7 +172,7 @@ static std::vector<std::string> candidate_paths(const char* path)
     return out;
 }
 
-// ------------------------- format loaders -----------------------
+//  format loaders
 
 static bool try_load_float_raw(const std::vector<char>& blob)
 {
@@ -229,7 +246,7 @@ static bool try_load_quantised(const std::vector<char>& blob)
     return (off == n_i16);
 }
 
-// ---------------------------- API -------------------------------
+//  API
 
 bool load_weights(const char* path)
 {
@@ -243,13 +260,13 @@ bool load_weights(const char* path)
         if (!slurp_file(p, blob))
             continue;
 
-        if (try_load_float_raw(blob)) {
-            LOADED_FORMAT = "float_raw";
+        if (try_load_quantised(blob)) { // prefer Bullet's quantised nets
+            LOADED_FORMAT = "quantised_i16";
             READY = true;
             return true;
         }
-        if (try_load_quantised(blob)) {
-            LOADED_FORMAT = "quantised_i16";
+        if (try_load_float_raw(blob)) {
+            LOADED_FORMAT = "float_raw";
             READY = true;
             return true;
         }
@@ -257,108 +274,301 @@ bool load_weights(const char* path)
     return false;
 }
 
-// --- Evaluation (quantised path, bit-for-bit like Rust) ---
-
-static int evaluate_quantised(const engine::Board& b)
+void init_position(const engine::Board& b, EvalState& st)
 {
-    const auto stm = b.side_to_move;
-    const auto ntm = (stm == engine::WHITE) ? engine::BLACK : engine::WHITE;
+    if (!READY)
+        throw std::runtime_error("NNUE not ready");
 
-    std::vector<int> idx_stm, idx_ntm;
-    fill_indices_all(b, stm, idx_stm);
-    fill_indices_all(b, ntm, idx_ntm);
+    st.H = H;
+    st.quantised = IS_Q;
+    st.stm = (uint8_t)b.side_to_move;
 
-    // Start hidden accumulators at bias (i16 semantics), add features (i16)
-    std::vector<int32_t> acc_stm(H), acc_ntm(H);
-    for (int i = 0; i < H; ++i) {
-        acc_stm[i] = (int32_t)L0B_q[i];
-        acc_ntm[i] = (int32_t)L0B_q[i];
+    if (IS_Q) {
+        st.accW_q.assign(H, 0);
+        st.accB_q.assign(H, 0);
+
+        for (int i = 0; i < H; ++i) {
+            st.accW_q[i] += (int32_t)L0B_q[i];
+            st.accB_q[i] += (int32_t)L0B_q[i];
+        }
+
+        for (int c = engine::WHITE; c <= engine::BLACK; ++c) {
+            for (int p = engine::PAWN; p <= engine::KING; ++p) {
+                engine::Bitboard bb = b.pieces[c][p];
+                while (bb) {
+                    int sq = __builtin_ctzll(bb);
+                    bb &= (bb - 1);
+
+                    int fW = feature_index((engine::Colour)engine::WHITE, (engine::Colour)c, p, sq);
+                    int fB = feature_index((engine::Colour)engine::BLACK, (engine::Colour)c, p, sq);
+
+                    const int16_t* colW = &L0W_T_q[(std::size_t)fW * H];
+                    const int16_t* colB = &L0W_T_q[(std::size_t)fB * H];
+
+                    for (int i = 0; i < H; ++i) {
+                        st.accW_q[i] += (int32_t)colW[i];
+                        st.accB_q[i] += (int32_t)colB[i];
+                    }
+                }
+            }
+        }
+    } else {
+        st.accW_f.assign(H, 0.0f);
+        st.accB_f.assign(H, 0.0f);
+        for (int i = 0; i < H; ++i) {
+            st.accW_f[i] += L0Bf[i];
+            st.accB_f[i] += L0Bf[i];
+        }
+
+        for (int c = engine::WHITE; c <= engine::BLACK; ++c) {
+            for (int p = engine::PAWN; p <= engine::KING; ++p) {
+                engine::Bitboard bb = b.pieces[c][p];
+                while (bb) {
+                    int sq = __builtin_ctzll(bb);
+                    bb &= (bb - 1);
+
+                    int fW = feature_index((engine::Colour)engine::WHITE, (engine::Colour)c, p, sq);
+                    int fB = feature_index((engine::Colour)engine::BLACK, (engine::Colour)c, p, sq);
+
+                    const float* colW = &L0W_Tf[(std::size_t)fW * H];
+                    const float* colB = &L0W_Tf[(std::size_t)fB * H];
+
+                    for (int i = 0; i < H; ++i) {
+                        st.accW_f[i] += colW[i];
+                        st.accB_f[i] += colB[i];
+                    }
+                }
+            }
+        }
     }
-
-    for (int f : idx_stm) {
-        const int16_t* col = &L0W_T_q[(std::size_t)f * H];
-        for (int i = 0; i < H; ++i)
-            acc_stm[i] += (int32_t)col[i];
-    }
-    for (int f : idx_ntm) {
-        const int16_t* col = &L0W_T_q[(std::size_t)f * H];
-        for (int i = 0; i < H; ++i)
-            acc_ntm[i] += (int32_t)col[i];
-    }
-
-    // Screlu in i16 domain
-    for (int i = 0; i < H; ++i) {
-        acc_stm[i] = screlu_i16((int16_t)acc_stm[i]);
-        acc_ntm[i] = screlu_i16((int16_t)acc_ntm[i]);
-    }
-
-    // Output accumulation (STM first half, NTM second half)
-    long long out = 0;
-    for (int i = 0; i < H; ++i)
-        out += (long long)acc_stm[i] * (long long)L1W_q[i];
-    for (int i = 0; i < H; ++i)
-        out += (long long)acc_ntm[i] * (long long)L1W_q[H + i];
-
-    // Reduce quantisation and scale exactly like Rust
-    out /= QA;                   // QA*QA*QB -> QA*QB
-    out += (long long)L1B_q;     // add bias (QA*QB)
-    out *= (long long)SCALE;     // to cp
-    out /= ((long long)QA * QB); // remove QA*QB
-
-    if (out > 20000)
-        out = 20000;
-    if (out < -20000)
-        out = -20000;
-    return (int)out;
 }
 
-// --- Evaluation (float_raw path) ---
-
-static int evaluate_float_raw(const engine::Board& b)
+int evaluate(const EvalState& st)
 {
-    const auto stm = b.side_to_move;
-    const auto ntm = (stm == engine::WHITE) ? engine::BLACK : engine::WHITE;
+    if (!READY)
+        throw std::runtime_error("NNUE not ready");
+    const bool stmWhite = (st.stm == (uint8_t)engine::WHITE);
 
-    std::vector<int> idx_stm, idx_ntm;
-    fill_indices_all(b, stm, idx_stm);
-    fill_indices_all(b, ntm, idx_ntm);
+    if (IS_Q) {
+        std::vector<int32_t> a_stm = stmWhite ? st.accW_q : st.accB_q;
+        std::vector<int32_t> a_ntm = stmWhite ? st.accB_q : st.accW_q;
 
-    std::vector<float> h_stm(L0Bf), h_ntm(L0Bf);
+        for (int i = 0; i < H; ++i) {
+            a_stm[i] = screlu_i16(a_stm[i]);
+            a_ntm[i] = screlu_i16(a_ntm[i]);
+        }
 
-    for (int f : idx_stm) {
-        const float* col = &L0W_Tf[(std::size_t)f * H];
+        long long out = 0;
         for (int i = 0; i < H; ++i)
-            h_stm[i] += col[i];
-    }
-    for (int f : idx_ntm) {
-        const float* col = &L0W_Tf[(std::size_t)f * H];
+            out += (long long)a_stm[i] * (long long)L1W_q[i];
         for (int i = 0; i < H; ++i)
-            h_ntm[i] += col[i];
+            out += (long long)a_ntm[i] * (long long)L1W_q[H + i];
+
+        out /= QA;
+        out += (long long)L1B_q;
+        out *= (long long)SCALE;
+        out /= ((long long)QA * QB);
+
+        if (out > 20000)
+            out = 20000;
+        if (out < -20000)
+            out = -20000;
+
+        return (int)out;
+    } else {
+        std::vector<float> a_stm = stmWhite ? st.accW_f : st.accB_f;
+        std::vector<float> a_ntm = stmWhite ? st.accB_f : st.accW_f;
+
+        for (int i = 0; i < H; ++i) {
+            a_stm[i] = screlu_float(a_stm[i]);
+            a_ntm[i] = screlu_float(a_ntm[i]);
+        }
+
+        float y = L1Bf;
+        for (int i = 0; i < H; ++i)
+            y += L1Wf[i] * a_stm[i];
+        for (int i = 0; i < H; ++i)
+            y += L1Wf[H + i] * a_ntm[i];
+
+        return to_centipawns(y);
+    }
+}
+
+static inline void apply_col_q(std::vector<int32_t>& acc, const int16_t* col, int sign)
+{
+    if (sign == 1)
+        for (int i = 0; i < H; ++i)
+            acc[i] += (int32_t)col[i];
+    else
+        for (int i = 0; i < H; ++i)
+            acc[i] -= (int32_t)col[i];
+}
+
+static inline void apply_col_f(std::vector<float>& acc, const float* col, int sign)
+{
+    if (sign == 1)
+        for (int i = 0; i < H; ++i)
+            acc[i] += col[i];
+    else
+        for (int i = 0; i < H; ++i)
+            acc[i] -= col[i];
+}
+
+void update(EvalState& st, const engine::Board& b, std::uint16_t m, NNUEDelta& d)
+{
+    using namespace engine;
+    if (!READY)
+        throw std::runtime_error("NNUE not ready");
+
+    d = NNUEDelta{}; // zero init
+    d.stm_before = (uint8_t)b.side_to_move;
+    const Colour us = b.side_to_move;
+    const Colour them = (us == WHITE) ? BLACK : WHITE;
+    const int from = from_sq(m);
+    const int to = to_sq(m);
+    const int fl = flag(m);
+
+    const Piece moved = piece_on(b, us, from);
+    Piece captured = NO_PIECE;
+    int capSq = to;
+
+    if (fl == CAPTURE || fl == PROMO_N_CAPTURE || fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE ||
+        fl == PROMO_Q_CAPTURE) {
+        captured = piece_on(b, them, to);
+    } else if (fl == EN_PASSANT) {
+        captured = PAWN;
+        capSq = (us == WHITE) ? (to - 8) : (to + 8);
     }
 
-    for (int i = 0; i < H; ++i) {
-        h_stm[i] = screlu_float(h_stm[i]);
-        h_ntm[i] = screlu_float(h_ntm[i]);
+    auto push_rem = [&](Colour ref, Colour side, Piece pc, int sq) {
+        int f = feature_index(ref, side, pc, sq);
+        if (ref == WHITE)
+            d.remW[d.remW_n++] = f;
+        else
+            d.remB[d.remB_n++] = f;
+    };
+
+    auto push_add = [&](Colour ref, Colour side, Piece pc, int sq) {
+        int f = feature_index(ref, side, pc, sq);
+        if (ref == WHITE)
+            d.addW[d.addW_n++] = f;
+        else
+            d.addB[d.addB_n++] = f;
+    };
+
+    if (moved != NO_PIECE) {
+        push_rem(WHITE, us, moved, from);
+        push_rem(BLACK, us, moved, from);
     }
 
-    float y = L1Bf;
-    for (int i = 0; i < H; ++i)
-        y += L1Wf[i] * h_stm[i]; // STM half
-    for (int i = 0; i < H; ++i)
-        y += L1Wf[H + i] * h_ntm[i]; // NTM half
+    // capture piece removal
+    if (captured != NO_PIECE) {
+        push_rem(WHITE, them, captured, capSq);
+        push_rem(BLACK, them, captured, capSq);
+    }
 
-    return to_centipawns(y);
+    // Add moved piece at destination
+    Piece placed = moved;
+    if (fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
+        fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
+        placed = promo_piece_from_flag(fl);
+    }
+
+    push_add(WHITE, us, placed, to);
+    push_add(BLACK, us, placed, to);
+
+    // Castling rook move
+    if (fl == KING_CASTLE || fl == QUEEN_CASTLE) {
+        int rf, rt;
+        if (us == WHITE) {
+            if (fl == KING_CASTLE) {
+                rf = H1;
+                rt = F1;
+            } else {
+                rf = A1;
+                rt = D1;
+            }
+        } else {
+            if (fl == KING_CASTLE) {
+                rf = H8;
+                rt = F8;
+            } else {
+                rf = A8;
+                rt = D8;
+            }
+        }
+
+        push_rem(WHITE, us, ROOK, rf);
+        push_rem(BLACK, us, ROOK, rf);
+        push_add(WHITE, us, ROOK, rt);
+        push_add(BLACK, us, ROOK, rt);
+    }
+
+    // Apply to accumulators
+    if (IS_Q) {
+        for (int i = 0; i < d.remW_n; ++i)
+            apply_col_q(st.accW_q, &L0W_T_q[(std::size_t)d.remW[i] * H], -1);
+        for (int i = 0; i < d.remB_n; ++i)
+            apply_col_q(st.accB_q, &L0W_T_q[(std::size_t)d.remB[i] * H], -1);
+        for (int i = 0; i < d.addW_n; ++i)
+            apply_col_q(st.accW_q, &L0W_T_q[(std::size_t)d.addW[i] * H], +1);
+        for (int i = 0; i < d.addB_n; ++i)
+            apply_col_q(st.accB_q, &L0W_T_q[(std::size_t)d.addB[i] * H], +1);
+    } else {
+        for (int i = 0; i < d.remW_n; ++i)
+            apply_col_f(st.accW_f, &L0W_Tf[(std::size_t)d.remW[i] * H], -1);
+        for (int i = 0; i < d.remB_n; ++i)
+            apply_col_f(st.accB_f, &L0W_Tf[(std::size_t)d.remB[i] * H], -1);
+        for (int i = 0; i < d.addW_n; ++i)
+            apply_col_f(st.accW_f, &L0W_Tf[(std::size_t)d.addW[i] * H], +1);
+        for (int i = 0; i < d.addB_n; ++i)
+            apply_col_f(st.accB_f, &L0W_Tf[(std::size_t)d.addB[i] * H], +1);
+    }
+
+    // flip STM: state now describes the post-move side to move
+    st.stm = (uint8_t)((b.side_to_move == WHITE) ? BLACK : WHITE);
+}
+
+void revert(EvalState& st, const NNUEDelta& d)
+{
+    if (!READY)
+        throw std::runtime_error("NNUE not ready");
+
+    // Apply inverse operations
+    if (IS_Q) {
+        for (int i = 0; i < d.addW_n; ++i)
+            apply_col_q(st.accW_q, &L0W_T_q[(std::size_t)d.addW[i] * H], -1);
+        for (int i = 0; i < d.addB_n; ++i)
+            apply_col_q(st.accB_q, &L0W_T_q[(std::size_t)d.addB[i] * H], -1);
+        for (int i = 0; i < d.remW_n; ++i)
+            apply_col_q(st.accW_q, &L0W_T_q[(std::size_t)d.remW[i] * H], +1);
+        for (int i = 0; i < d.remB_n; ++i)
+            apply_col_q(st.accB_q, &L0W_T_q[(std::size_t)d.remB[i] * H], +1);
+    } else {
+        for (int i = 0; i < d.addW_n; ++i)
+            apply_col_f(st.accW_f, &L0W_Tf[(std::size_t)d.addW[i] * H], -1);
+        for (int i = 0; i < d.addB_n; ++i)
+            apply_col_f(st.accB_f, &L0W_Tf[(std::size_t)d.addB[i] * H], -1);
+        for (int i = 0; i < d.remW_n; ++i)
+            apply_col_f(st.accW_f, &L0W_Tf[(std::size_t)d.remW[i] * H], +1);
+        for (int i = 0; i < d.remB_n; ++i)
+            apply_col_f(st.accB_f, &L0W_Tf[(std::size_t)d.remB[i] * H], +1);
+    }
+
+    // restore STM
+    st.stm = d.stm_before;
 }
 
 int evaluate(const engine::Board& b)
 {
     if (!READY)
         throw std::runtime_error("NNUE not ready");
-    return IS_Q ? evaluate_quantised(b) : evaluate_float_raw(b);
+    EvalState st;
+    init_position(b, st);
+    return evaluate(st);
 }
 
 // --------------------------- debug ------------------------------
-
 static inline void stats_vec_f(const char* name, const std::vector<float>& v)
 {
     if (v.empty()) {
@@ -459,11 +669,6 @@ void debug_dump(const engine::Board& b)
     const auto ntm = (stm == engine::WHITE) ? engine::BLACK : engine::WHITE;
 
     // Build both orientations
-    std::vector<int> idx_stm, idx_ntm;
-    fill_indices_all(b, stm, idx_stm);
-    fill_indices_all(b, ntm, idx_ntm);
-    std::cerr << "Indices: stm=" << idx_stm.size() << "  ntm=" << idx_ntm.size() << "\n";
-
     auto dump_plane_counts = [&](engine::Colour ref, const char* tag) {
         int cnt[12];
         count_planes(b, ref, cnt);
@@ -482,140 +687,8 @@ void debug_dump(const engine::Board& b)
     dump_plane_counts(stm, "STM");
     dump_plane_counts(ntm, "NTM");
 
-    // Trace a single eval, mirroring the active path
-    if (IS_Q) {
-        std::vector<int32_t> s_stm(H), s_ntm(H);
-        for (int i = 0; i < H; ++i) {
-            s_stm[i] = L0B_q[i];
-            s_ntm[i] = L0B_q[i];
-        }
-
-        for (int f : idx_stm) {
-            const int16_t* col = &L0W_T_q[(std::size_t)f * H];
-            for (int i = 0; i < H; ++i)
-                s_stm[i] += (int32_t)col[i];
-        }
-        for (int f : idx_ntm) {
-            const int16_t* col = &L0W_T_q[(std::size_t)f * H];
-            for (int i = 0; i < H; ++i)
-                s_ntm[i] += (int32_t)col[i];
-        }
-
-        auto post = [&](std::vector<int32_t>& v, const char* tag) {
-            int zeros = 0, ones = 0, gt1 = 0, lt0 = 0;
-            long long sum = 0;
-            int mn = (int)v[0], mx = (int)v[0];
-            for (int i = 0; i < H; ++i) {
-                int32_t x = v[i];
-                mn = std::min(mn, (int)x);
-                mx = std::max(mx, (int)x);
-                if (x < 0)
-                    lt0++;
-                int32_t y = screlu_i16((int16_t)x); // 0..QA^2
-                gt1 += (x > QA);
-                zeros += (y == 0);
-                ones += (y >= (QA * QA));
-                v[i] = y;
-                sum += y;
-            }
-            double mean_post = (double)sum / (double)H;
-            std::cerr << tag << " activations:\n";
-            std::cerr << "   pre: min=" << mn << " max=" << mx << "  (<0: " << lt0 << ", >QA: " << gt1 << ")\n"
-                      << "   post screlu: mean=" << std::fixed << std::setprecision(3) << mean_post
-                      << "  zeros=" << zeros << "  ones=" << ones << "\n";
-        };
-        post(s_stm, "STM");
-        post(s_ntm, "NTM");
-
-        // Output parts (integer path)
-        long long y = 0;
-        long long y_stm = 0, y_ntm = 0;
-        for (int i = 0; i < H; ++i) {
-            y_stm += (long long)s_stm[i] * (long long)L1W_q[i];
-        }
-        for (int i = 0; i < H; ++i) {
-            y_ntm += (long long)s_ntm[i] * (long long)L1W_q[H + i];
-        }
-        y = y_stm + y_ntm;
-
-        long long y_qaqb = y / QA + (long long)L1B_q; // in QA*QB units
-        double y_cp = (double)y_qaqb * (double)SCALE / ((double)QA * (double)QB);
-
-        std::cerr << std::fixed << std::setprecision(6);
-        std::cerr << "Output parts:\n";
-        std::cerr << "  bias      = " << (double)L1B_q / ((double)QA * (double)QB) << "   ("
-                  << ((double)L1B_q * (double)SCALE / ((double)QA * (double)QB)) << " cp)\n";
-        std::cerr << "  stm sum   = " << ((double)y_stm / ((double)QA * (double)QA * (double)QB)) << "   ("
-                  << ((double)y_stm * (double)SCALE / ((double)QA * (double)QA * (double)QB)) << " cp)\n";
-        std::cerr << "  ntm sum   = " << ((double)y_ntm / ((double)QA * (double)QA * (double)QB)) << "   ("
-                  << ((double)y_ntm * (double)SCALE / ((double)QA * (double)QA * (double)QB)) << " cp)\n";
-        std::cerr << "  TOTAL y   = " << (y_cp / (double)SCALE) << "   (" << y_cp << " cp)\n";
-
-        // quick flip check (not guaranteed to negate)
-        engine::Board flip = b;
-        flip.side_to_move = (b.side_to_move == engine::WHITE) ? engine::BLACK : engine::WHITE;
-        int cp_here = (int)std::lround(y_cp);
-        int cp_flip = evaluate(flip);
-        std::cerr << "Side-to-move flip check: this=" << cp_here << " cp, flipped=" << cp_flip << " cp\n";
-    } else {
-        // Float trace mirrors evaluate_float_raw
-        std::vector<float> s_stm(L0Bf), s_ntm(L0Bf);
-        for (int f : idx_stm) {
-            const float* col = &L0W_Tf[(std::size_t)f * H];
-            for (int i = 0; i < H; ++i)
-                s_stm[i] += col[i];
-        }
-        for (int f : idx_ntm) {
-            const float* col = &L0W_Tf[(std::size_t)f * H];
-            for (int i = 0; i < H; ++i)
-                s_ntm[i] += col[i];
-        }
-
-        auto post = [&](std::vector<float>& v, const char* tag) {
-            int zeros = 0, ones = 0, gt1 = 0, lt0 = 0;
-            double sum = 0.0, mn = v[0], mx = v[0];
-            for (float& x : v) {
-                mn = std::min<double>(mn, x);
-                mx = std::max<double>(mx, x);
-                if (x < 0.0f)
-                    lt0++;
-                float y = screlu_float(x);
-                gt1 += (x > 1.0f);
-                zeros += (y <= 0.0f);
-                ones += (y >= 1.0f);
-                x = y;
-                sum += y;
-            }
-            std::cerr << tag << " activations:\n";
-            std::cerr << std::fixed << std::setprecision(6) << "   pre: min=" << mn << " max=" << mx << "  (<0: " << lt0
-                      << ", >1: " << gt1 << ")\n"
-                      << "   post screlu: mean=" << (sum / (double)v.size()) << "  zeros=" << zeros << "  ones=" << ones
-                      << "\n";
-        };
-        post(s_stm, "STM");
-        post(s_ntm, "NTM");
-
-        double y_bias = L1Bf, y_stm = 0.0, y_ntm = 0.0;
-        for (int i = 0; i < H; ++i)
-            y_stm += (double)L1Wf[i] * (double)s_stm[i];
-        for (int i = 0; i < H; ++i)
-            y_ntm += (double)L1Wf[H + i] * (double)s_ntm[i];
-        double y = y_bias + y_stm + y_ntm;
-
-        std::cerr << std::fixed << std::setprecision(6);
-        std::cerr << "Output parts:\n";
-        std::cerr << "  bias      = " << y_bias << "   (" << y_bias * 400.0 << " cp)\n";
-        std::cerr << "  stm sum   = " << y_stm << "   (" << y_stm * 400.0 << " cp)\n";
-        std::cerr << "  ntm sum   = " << y_ntm << "   (" << y_ntm * 400.0 << " cp)\n";
-        std::cerr << "  TOTAL y   = " << y << "   (" << y * 400.0 << " cp)\n";
-
-        engine::Board flip = b;
-        flip.side_to_move = (b.side_to_move == engine::WHITE) ? engine::BLACK : engine::WHITE;
-        int cp_here = to_centipawns((float)y);
-        int cp_flip = evaluate(flip);
-        std::cerr << "Side-to-move flip check: this=" << cp_here << " cp, flipped=" << cp_flip << " cp\n";
-    }
-
+    // One-shot eval for a sanity check
+    std::cerr << "evaluate(b) = " << evaluate(b) << " cp\n";
     std::cerr << "===== end NNUE DIAG =====\n";
 }
 

@@ -200,17 +200,17 @@ static std::string move_to_uci(Move m)
 }
 
 // Quiesence search (captures and promotions only)
-static inline int qsearch(Board& b, int alpha, int beta)
+static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
 {
     g_nodes.fetch_add(1, std::memory_order_relaxed);
 
     if (time_enabled()) {
         static thread_local int tick = 0;
         if ((++tick & 31) == 0 && past_hard())
-            return eval::evaluate(b);
+            return eval::evaluate(es);
     }
 
-    int stand = eval::evaluate(b);
+    int stand = eval::evaluate(es);
     if (stand >= beta)
         return stand;
     if (stand > alpha)
@@ -228,9 +228,9 @@ static inline int qsearch(Board& b, int alpha, int beta)
             continue;
 
         Undo u;
-        make_move(b, m, u);
-        int score = -qsearch(b, -beta, -alpha);
-        unmake_move(b, m, u);
+        make_move(b, m, u, &es);
+        int score = -qsearch(b, es, -beta, -alpha);
+        unmake_move(b, m, u, &es);
 
         if (score >= beta)
             return score;
@@ -242,7 +242,7 @@ static inline int qsearch(Board& b, int alpha, int beta)
 }
 
 // Core search
-static inline int negamax(Board& b, int depth, int alpha, int beta, int ply)
+static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, int beta, int ply)
 {
     g_nodes.fetch_add(1, std::memory_order_relaxed);
 
@@ -254,7 +254,7 @@ static inline int negamax(Board& b, int depth, int alpha, int beta, int ply)
         // every 32 nodes check if we have exceeded maximum allowable time.
         if ((++check_counter & 31) == 0 && past_hard()) {
             // Out of time: return static eval as a bounded fallback
-            return eval::evaluate(b);
+            return eval::evaluate(es);
         }
     }
 
@@ -272,7 +272,7 @@ static inline int negamax(Board& b, int depth, int alpha, int beta, int ply)
 
     // quiescence to check for captures if depth exhausted
     if (depth == 0)
-        return qsearch(b, alpha, beta);
+        return qsearch(b, es, alpha, beta);
 
     int best = std::numeric_limits<int>::min() / 2;
     Move bestMove = 0;
@@ -290,9 +290,9 @@ static inline int negamax(Board& b, int depth, int alpha, int beta, int ply)
 
     for (Move m : moves) {
         Undo u;
-        make_move(b, m, u);
-        int score = -negamax(b, depth - 1, -beta, -alpha, ply + 1);
-        unmake_move(b, m, u);
+        make_move(b, m, u, &es);
+        int score = -negamax(b, es, depth - 1, -beta, -alpha, ply + 1);
+        unmake_move(b, m, u, &es);
 
         if (score > best) {
             best = score;
@@ -329,6 +329,9 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     g_hard_ms = hard_ms;
     g_nodes = 0;
 
+    eval::EvalState es;
+    eval::init_position(b, es);
+
     Move best_move = 0;
 
     for (int d = 1; d <= maxDepth; ++d) {
@@ -347,9 +350,9 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
                 break; // don't start new branches past soft time cutoff
 
             Undo u;
-            make_move(b, m, u);
-            int score = -negamax(b, d - 1, -beta, -alpha, 1);
-            unmake_move(b, m, u);
+            make_move(b, m, u, &es);
+            int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
+            unmake_move(b, m, u, &es);
 
             if (score > best) {
                 best = score;
@@ -387,6 +390,9 @@ Move search_best_move(Board& b, int depth)
     auto start = clock::now();
     g_nodes = 0;
 
+    eval::EvalState es;
+    eval::init_position(b, es);
+
     Move best_move = 0;
 
     for (int d = 1; d <= depth; ++d) {
@@ -402,9 +408,9 @@ Move search_best_move(Board& b, int depth)
 
         for (Move m : moves) {
             Undo u;
-            make_move(b, m, u);
-            int score = -negamax(b, d - 1, -beta, -alpha, 1);
-            unmake_move(b, m, u);
+            make_move(b, m, u, &es);
+            int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
+            unmake_move(b, m, u, &es);
 
             if (score > best) {
                 best = score;

@@ -361,4 +361,22 @@ void unmake_move(Board& b, Move m, Undo& u)
     // Update Zobrist key for restored EP square (if any & capturable)
     b.zkey_ ^= zobrist::ep_component(b, b.side_to_move);
 }
+
+void make_move(Board& b, Move m, Undo& u, eval::EvalState* es)
+{
+    if (es) {
+        u.nnue = {};
+        eval::update(*es, b, m, u.nnue);
+    }
+    make_move(b, m, u);
+}
+
+void unmake_move(Board& b, Move m, Undo& u, eval::EvalState* es)
+{
+    unmake_move(b, m, u);
+    if (es) {
+        eval::revert(*es, u.nnue);
+    }
+}
+
 } // namespace engine
