@@ -301,29 +301,6 @@ void tt_clear()
     }
 }
 
-// static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
-// {
-//     Move ttBest = 0;
-//     int dummy;
-//     (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
-
-//     if (ttBest) {
-//         // move ttBest to front
-//         auto it = std::find(moves.begin(), moves.end(), ttBest);
-//         if (it != moves.end())
-//             std::rotate(moves.begin(), it, it + 1);
-//     } else {
-//         // Naive ordering: captures first
-//         // TODO: better heuristics
-//         std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
-//             const bool ca = is_capture(a), cb = is_capture(b);
-//             if (ca != cb)
-//                 return ca > cb;
-//             return a < b;
-//         });
-//     }
-// }
-
 static inline bool time_enabled()
 {
     return g_hard_ms > 0;
