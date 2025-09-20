@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -24,6 +25,182 @@ static inline int mated_in(int ply)
 {
     return -MATE_SCORE + ply;
 }
+
+static inline bool tt_probe(const Board&, int depth, int alpha, int beta, int& outScore, Move& outBest);
+
+// Move ordering machinery
+namespace {
+
+constexpr int MAX_PLY = 128;
+
+// two killer moves per ply (quiet moves that caused beta cutoffs)
+static Move g_killer1[MAX_PLY];
+static Move g_killer2[MAX_PLY];
+
+// STM history table: history[side][from][to]
+static int g_history[2][64][64];
+
+// Piece 'values' for MVV/LVA (relative ordering)
+static constexpr int PVAL[6] = {100, 320, 330, 500, 900, 20000}; // P,N,B,R,Q,K
+
+inline bool is_promo_any(Move m)
+{
+    int f = flag(m);
+    return f >= PROMO_N && f <= PROMO_Q_CAPTURE;
+}
+
+inline bool is_promo_noncap(Move m)
+{
+    int f = flag(m);
+    return (f == PROMO_N || f == PROMO_B || f == PROMO_R || f == PROMO_Q);
+}
+
+// Quick piece lookup on a side/square
+inline Piece piece_on(const Board& b, Colour c, int sq)
+{
+    Bitboard m = (1ULL << sq);
+    for (int p = PAWN; p <= KING; ++p)
+        if (b.pieces[c][p] & m)
+            return (Piece)p;
+    return NO_PIECE;
+}
+
+inline Piece captured_piece(const Board& b, Move m)
+{
+    const int fl = flag(m);
+    if (fl == EN_PASSANT)
+        return PAWN;
+
+    const Colour us = b.side_to_move;
+    const Colour them = (us == WHITE) ? BLACK : WHITE;
+    const int to = to_sq(m);
+
+    for (int p = PAWN; p <= KING; ++p) {
+        if (b.pieces[them][p] & (1ULL << to))
+            return (Piece)p;
+    }
+    return NO_PIECE;
+}
+
+// Attatcker piece current sits on 'from' before making move m
+inline Piece attacker_piece(const Board& b, Move m)
+{
+    const Colour us = b.side_to_move;
+    return piece_on(b, us, from_sq(m));
+}
+
+// higher is better
+inline int mvv_lva(const Board& b, Move m)
+{
+    Piece vic = captured_piece(b, m);
+    Piece att = attacker_piece(b, m);
+    if (vic == NO_PIECE || att == NO_PIECE)
+        return 0;
+
+    return PVAL[vic] * 16 - PVAL[att];
+}
+
+inline int score_move(const Board& b, Move m, Move ttBest, int ply)
+{
+    // big bucket constants
+    constexpr int S_TT = 1'000'000'000;
+    constexpr int S_CAP_BASE = 800'000'000;
+    constexpr int S_PROMO = 700'000'000; // non-capture promotions
+    constexpr int S_k1 = 600'000'000;
+    constexpr int S_k2 = 599'000'000;
+    constexpr int S_HIST = 1'000; // base added to history
+
+    if (m == ttBest)
+        return S_TT;
+
+    if (is_capture(m)) {
+        return S_CAP_BASE + mvv_lva(b, m);
+    }
+
+    if (is_promo_noncap(m)) {
+        int bonus = 0;
+        switch (flag(m)) {
+        case PROMO_Q:
+            bonus = 900;
+            break;
+        case PROMO_R:
+            bonus = 500;
+            break;
+        case PROMO_B:
+            bonus = 330;
+            break;
+        case PROMO_N:
+            bonus = 320;
+            break;
+        default:
+            break;
+        }
+        return S_PROMO + bonus;
+    }
+
+    // Killer quiets
+    if (ply >= 0 && ply < MAX_PLY) {
+        if (m == g_killer1[ply])
+            return S_k1;
+        if (m == g_killer2[ply])
+            return S_k2;
+    }
+
+    const Colour us = b.side_to_move;
+    int h = g_history[us][from_sq(m)][to_sq(m)];
+    return S_HIST + h;
+}
+
+// Sort helper
+inline void order_moves(Board& b, std::vector<Move>& moves, int ply)
+{
+    Move ttBest = 0;
+    int dummy;
+    (void)dummy;
+
+    (void)tt_probe(b, 0, -30000, 30000, dummy, ttBest);
+
+    std::stable_sort(moves.begin(), moves.end(), [&](Move m1, Move m2) {
+        int sa = score_move(b, m1, ttBest, ply);
+        int sb = score_move(b, m2, ttBest, ply);
+        if (sa != sb)
+            return sa > sb;
+        return m1 < m2; // stable
+    });
+}
+
+// update killer moves and history on quiet beta cutoff
+inline void on_quiet_cutoff(const Board& b, Move m, int depth, int ply)
+{
+    // only on quiet moves (no captures/promos)
+    if (is_capture(m) || is_promo_any(m))
+        return;
+
+    // Killers
+    if (ply >= 0 && ply < MAX_PLY) {
+        if (g_killer1[ply] != m) {
+            g_killer2[ply] = g_killer1[ply];
+            g_killer1[ply] = m;
+        }
+    }
+
+    // history bump (depth ^ 2 is common heuristic)
+    const int bump = depth * depth;
+    const Colour us = b.side_to_move;
+    int& cell = g_history[us][from_sq(m)][to_sq(m)];
+
+    // simple saturation
+    if (cell < 2'000'000'000 - bump)
+        cell += bump;
+}
+
+inline void clear_move_ordering()
+{
+    std::memset(g_killer1, 0, sizeof(g_killer1));
+    std::memset(g_killer2, 0, sizeof(g_killer2));
+    std::memset(g_history, 0, sizeof(g_history));
+}
+} // namespace
 
 // time management statics
 using clock = std::chrono::steady_clock;
@@ -124,28 +301,28 @@ void tt_clear()
     }
 }
 
-static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
-{
-    Move ttBest = 0;
-    int dummy;
-    (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
+// static void order_moves_tt_first(Board& b, std::vector<Move>& moves)
+// {
+//     Move ttBest = 0;
+//     int dummy;
+//     (void)tt_probe(b, /*depth*/ 0, -30000, 30000, dummy, ttBest);
 
-    if (ttBest) {
-        // move ttBest to front
-        auto it = std::find(moves.begin(), moves.end(), ttBest);
-        if (it != moves.end())
-            std::rotate(moves.begin(), it, it + 1);
-    } else {
-        // Naive ordering: captures first
-        // TODO: better heuristics
-        std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
-            const bool ca = is_capture(a), cb = is_capture(b);
-            if (ca != cb)
-                return ca > cb;
-            return a < b;
-        });
-    }
-}
+//     if (ttBest) {
+//         // move ttBest to front
+//         auto it = std::find(moves.begin(), moves.end(), ttBest);
+//         if (it != moves.end())
+//             std::rotate(moves.begin(), it, it + 1);
+//     } else {
+//         // Naive ordering: captures first
+//         // TODO: better heuristics
+//         std::stable_sort(moves.begin(), moves.end(), [](Move a, Move b) {
+//             const bool ca = is_capture(a), cb = is_capture(b);
+//             if (ca != cb)
+//                 return ca > cb;
+//             return a < b;
+//         });
+//     }
+// }
 
 static inline bool time_enabled()
 {
@@ -217,6 +394,8 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
         alpha = stand;
 
     std::vector<Move> moves = generate_legal_moves(b);
+    order_moves(b, moves, 0);
+
     for (Move m : moves) {
         const int fl = flag(m);
         const bool isPromo =
@@ -286,7 +465,7 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
     }
 
     // Move ordering: try TT best move first if available
-    order_moves_tt_first(b, moves);
+    order_moves(b, moves, ply);
 
     for (Move m : moves) {
         Undo u;
@@ -303,8 +482,10 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
             alpha = best;
         }
 
-        if (alpha >= beta)
+        if (alpha >= beta) {
+            on_quiet_cutoff(b, m, depth, ply);
             break; // alpha-beta cutoff
+        }
 
         if (time_enabled() && past_hard())
             break; // hit hard wall mid-iteration
@@ -329,6 +510,8 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     g_hard_ms = hard_ms;
     g_nodes = 0;
 
+    clear_move_ordering();
+
     eval::EvalState es;
     eval::init_position(b, es);
 
@@ -341,9 +524,7 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
         Move local_best = 0;
 
         std::vector<Move> moves = generate_legal_moves(b);
-
-        // Try TT move first; else captures-first
-        order_moves_tt_first(b, moves);
+        order_moves(b, moves, 0);
 
         for (Move m : moves) {
             if (time_enabled() && past_soft())
@@ -390,6 +571,8 @@ Move search_best_move(Board& b, int depth)
     auto start = clock::now();
     g_nodes = 0;
 
+    clear_move_ordering();
+
     eval::EvalState es;
     eval::init_position(b, es);
 
@@ -402,9 +585,7 @@ Move search_best_move(Board& b, int depth)
         Move local_best = 0;
 
         std::vector<Move> moves = generate_legal_moves(b);
-
-        // Try TT move first; else captures-first
-        order_moves_tt_first(b, moves);
+        order_moves(b, moves, 0);
 
         for (Move m : moves) {
             Undo u;
