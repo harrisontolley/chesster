@@ -26,6 +26,10 @@ static inline int mated_in(int ply)
     return -MATE_SCORE + ply;
 }
 
+static constexpr bool ASP_DEBUG = true;
+// Aspiration window half-width
+static constexpr int ASP_DELTA_CP = 1024;
+
 static inline bool tt_probe(const Board&, int depth, int alpha, int beta, int& outScore, Move& outBest);
 
 // Move ordering machinery
@@ -303,6 +307,30 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
             return eval::evaluate(es);
     }
 
+    // If we're in check at qsearch, we must search evasions (no stand-pat).
+    if (in_check(b)) {
+        std::vector<Move> moves = generate_legal_moves(b);
+        order_moves(b, moves, 0);
+
+        if (moves.empty())
+            return -MATE_SCORE + 1; // bounded mate-ish value
+
+        for (Move m : moves) {
+            Undo u;
+            make_move(b, m, u, &es);
+            int score = -qsearch(b, es, -beta, -alpha);
+            unmake_move(b, m, u, &es);
+
+            if (score > alpha) {
+                alpha = score;
+                if (alpha >= beta)
+                    return alpha;
+            }
+        }
+        return alpha;
+    }
+
+    // normal stand-pat
     int stand = eval::evaluate(es);
     if (stand >= beta)
         return stand;
@@ -313,9 +341,6 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
     order_moves(b, moves, 0);
 
     for (Move m : moves) {
-        // const int fl = flag(m);
-
-        // only consider captures and promotions
         if (!(is_capture(m) || is_promo_any(m)))
             continue;
 
@@ -329,7 +354,6 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
         if (score > alpha)
             alpha = score;
     }
-
     return alpha;
 }
 
@@ -445,40 +469,96 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     eval::init_position(b, es);
 
     Move best_move = 0;
+    bool have_last = false;
+    int last_score = 0;
 
     for (int d = 1; d <= maxDepth; ++d) {
-        int alpha = -30000, beta = 30000;
+        // Reset aspiration window each depth
+        int delta = have_last ? ASP_DELTA_CP : 500; // wide for the first real score
+        int alpha_try = have_last ? (last_score - delta) : -MATE_SCORE;
+        int beta_try = have_last ? (last_score + delta) : MATE_SCORE;
 
         int best = std::numeric_limits<int>::min() / 2;
         Move local_best = 0;
 
-        std::vector<Move> moves = generate_legal_moves(b);
-        order_moves(b, moves, 0);
+        while (true) {
+            if (time_enabled() && past_hard())
+                break;
 
-        for (Move m : moves) {
-            if (time_enabled() && past_soft())
-                break; // don't start new branches past soft time cutoff
+            int alpha = alpha_try, beta = beta_try;
+            best = std::numeric_limits<int>::min() / 2;
+            local_best = 0;
 
-            Undo u;
-            make_move(b, m, u, &es);
-            int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
-            unmake_move(b, m, u, &es);
+            std::vector<Move> moves = generate_legal_moves(b);
+            order_moves(b, moves, 0);
 
-            if (score > best) {
-                best = score;
-                local_best = m;
+            for (Move m : moves) {
+                if (time_enabled() && past_soft())
+                    break;
+
+                Undo u;
+                make_move(b, m, u, &es);
+                int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
+                unmake_move(b, m, u, &es);
+
+                if (score > best) {
+                    best = score;
+                    local_best = m;
+                }
+                if (best > alpha)
+                    alpha = best;
+
+                if (time_enabled() && past_hard())
+                    break;
             }
-            if (best > alpha)
-                alpha = best;
 
             if (time_enabled() && past_hard())
-                break; // hit hard wall mid-iteration
+                break;
+
+            // aspiration result check (use the tried window, not the updated alpha/beta)
+            if (best <= alpha_try) {
+                // fail-low: widen downward once
+                int oldA = alpha_try, oldB = beta_try, oldDelta = delta;
+                delta *= 2;
+                alpha_try = (have_last ? last_score : best) - delta;
+                beta_try = (have_last ? last_score : best) + delta;
+                if (alpha_try < -MATE_SCORE)
+                    alpha_try = -MATE_SCORE;
+                if (beta_try > MATE_SCORE)
+                    beta_try = MATE_SCORE;
+
+                if (ASP_DEBUG) {
+                    std::cout << "info string asp depth " << d << " fail-low last=" << (have_last ? last_score : best)
+                              << " best=" << best << " win0=[" << oldA << "," << oldB << "] Δ0=" << oldDelta
+                              << " -> win1=[" << alpha_try << "," << beta_try << "] Δ1=" << delta << "\n";
+                }
+                continue;
+            } else if (best >= beta_try) {
+                // fail-high: widen upward once (symmetrically)
+                int oldA = alpha_try, oldB = beta_try, oldDelta = delta;
+                delta *= 2;
+                alpha_try = (have_last ? last_score : best) - delta;
+                beta_try = (have_last ? last_score : best) + delta;
+                if (alpha_try < -MATE_SCORE)
+                    alpha_try = -MATE_SCORE;
+                if (beta_try > MATE_SCORE)
+                    beta_try = MATE_SCORE;
+
+                if (ASP_DEBUG) {
+                    std::cout << "info string asp depth " << d << " fail-high last=" << (have_last ? last_score : best)
+                              << " best=" << best << " win0=[" << oldA << "," << oldB << "] Δ0=" << oldDelta
+                              << " -> win1=[" << alpha_try << "," << beta_try << "] Δ1=" << delta << "\n";
+                }
+                continue;
+            }
+            break; // score inside window
         }
 
         if (local_best)
             best_move = local_best;
+        last_score = best;
+        have_last = true;
 
-        // UCI info line (depth complete)
         using namespace std::chrono;
         auto ms = duration_cast<milliseconds>(clock::now() - g_start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
@@ -487,10 +567,10 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
                   << nps << " pv " << move_to_uci(best_move) << "\n";
 
         if (time_enabled() && past_soft())
-            break; // stop after finishing this depth
+            break;
     }
 
-    g_soft_ms = g_hard_ms = 0; // reset for next call
+    g_soft_ms = g_hard_ms = 0;
     return best_move;
 }
 
@@ -506,34 +586,80 @@ Move search_best_move(Board& b, int depth)
     eval::init_position(b, es);
 
     Move best_move = 0;
+    bool have_last = false;
+    int last_score = 0;
 
     for (int d = 1; d <= depth; ++d) {
-        int alpha = -30000, beta = 30000;
+        int delta = have_last ? ASP_DELTA_CP : 500;
+        int alpha_try = have_last ? (last_score - delta) : -MATE_SCORE;
+        int beta_try = have_last ? (last_score + delta) : MATE_SCORE;
 
         int best = std::numeric_limits<int>::min() / 2;
         Move local_best = 0;
 
-        std::vector<Move> moves = generate_legal_moves(b);
-        order_moves(b, moves, 0);
+        while (true) {
+            int alpha = alpha_try, beta = beta_try;
+            best = std::numeric_limits<int>::min() / 2;
+            local_best = 0;
 
-        for (Move m : moves) {
-            Undo u;
-            make_move(b, m, u, &es);
-            int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
-            unmake_move(b, m, u, &es);
+            std::vector<Move> moves = generate_legal_moves(b);
+            order_moves(b, moves, 0);
 
-            if (score > best) {
-                best = score;
-                local_best = m;
+            for (Move m : moves) {
+                Undo u;
+                make_move(b, m, u, &es);
+                int score = -negamax(b, es, d - 1, -beta, -alpha, 1);
+                unmake_move(b, m, u, &es);
+
+                if (score > best) {
+                    best = score;
+                    local_best = m;
+                }
+                if (best > alpha)
+                    alpha = best;
             }
-            if (best > alpha)
-                alpha = best;
+
+            if (best <= alpha_try) {
+                int oldA = alpha_try, oldB = beta_try, oldDelta = delta;
+                delta *= 2;
+                alpha_try = (have_last ? last_score : best) - delta;
+                beta_try = (have_last ? last_score : best) + delta;
+                if (alpha_try < -MATE_SCORE)
+                    alpha_try = -MATE_SCORE;
+                if (beta_try > MATE_SCORE)
+                    beta_try = MATE_SCORE;
+
+                if (ASP_DEBUG) {
+                    std::cout << "info string asp depth " << d << " fail-low last=" << (have_last ? last_score : best)
+                              << " best=" << best << " win0=[" << oldA << "," << oldB << "] Δ0=" << oldDelta
+                              << " -> win1=[" << alpha_try << "," << beta_try << "] Δ1=" << delta << "\n";
+                }
+                continue;
+            } else if (best >= beta_try) {
+                int oldA = alpha_try, oldB = beta_try, oldDelta = delta;
+                delta *= 2;
+                alpha_try = (have_last ? last_score : best) - delta;
+                beta_try = (have_last ? last_score : best) + delta;
+                if (alpha_try < -MATE_SCORE)
+                    alpha_try = -MATE_SCORE;
+                if (beta_try > MATE_SCORE)
+                    beta_try = MATE_SCORE;
+
+                if (ASP_DEBUG) {
+                    std::cout << "info string asp depth " << d << " fail-high last=" << (have_last ? last_score : best)
+                              << " best=" << best << " win0=[" << oldA << "," << oldB << "] Δ0=" << oldDelta
+                              << " -> win1=[" << alpha_try << "," << beta_try << "] Δ1=" << delta << "\n";
+                }
+                continue;
+            }
+            break; // success inside window
         }
 
         if (local_best)
             best_move = local_best;
+        last_score = best;
+        have_last = true;
 
-        // UCI info line (depth complete)
         using namespace std::chrono;
         auto ms = duration_cast<milliseconds>(clock::now() - start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
