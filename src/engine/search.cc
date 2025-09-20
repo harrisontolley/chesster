@@ -195,7 +195,7 @@ struct TTEntry {
     // 18 bytes total + padding
 };
 
-static constexpr std::size_t TT_LOG2 = 22;
+static constexpr std::size_t TT_LOG2 = 23;
 static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
 static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
 static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
@@ -380,10 +380,27 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
     // Move ordering: try TT best move first if available
     order_moves(b, moves, ply);
 
+    bool first = true;
     for (Move m : moves) {
         Undo u;
         make_move(b, m, u, &es);
-        int score = -negamax(b, es, depth - 1, -beta, -alpha, ply + 1);
+
+        int score;
+        if (first) {
+            // first move: full window (likely PV)
+            score = -negamax(b, es, depth - 1, -beta, -alpha, ply + 1);
+            first = false;
+        } else {
+            // subsequent moves: try cheap null window
+            int nwBeta = alpha + 1;
+            score = -negamax(b, es, depth - 1, -nwBeta, -alpha, ply + 1);
+
+            // Fail high? research with full window to get exact score.
+            if (score > alpha) {
+                score = -negamax(b, es, depth - 1, -beta, -alpha, ply + 1);
+            }
+        }
+
         unmake_move(b, m, u, &es);
 
         if (score > best) {
@@ -391,9 +408,8 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
             bestMove = m;
         }
 
-        if (best > alpha) {
+        if (best > alpha)
             alpha = best;
-        }
 
         if (alpha >= beta) {
             on_quiet_cutoff(b, m, depth, ply);
