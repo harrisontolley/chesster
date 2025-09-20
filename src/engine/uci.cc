@@ -7,6 +7,7 @@
 #include "movegen.hh"
 #include "perft.hh"
 #include "search.hh"
+#include "util.hh"
 
 #include <cmath>
 #include <iostream>
@@ -18,41 +19,6 @@ static std::string eval_file_path;   // from UCI setoption
 static std::string last_loaded_path; // actually loaded file
 static bool eval_initialised = false;
 static int move_overhead_ms = 80;
-
-static std::string sq_to_str(int sq)
-{
-    if (sq < 0 || sq > 63)
-        return "??";
-    char f = char('a' + (sq & 7));
-    char r = char('1' + (sq >> 3));
-    return std::string() + f + r;
-}
-
-static std::string move_to_uci(Move m)
-{
-    std::string s = sq_to_str(from_sq(m)) + sq_to_str(to_sq(m));
-    switch (flag(m)) {
-    case PROMO_Q:
-    case PROMO_Q_CAPTURE:
-        s += 'q';
-        break;
-    case PROMO_R:
-    case PROMO_R_CAPTURE:
-        s += 'r';
-        break;
-    case PROMO_B:
-    case PROMO_B_CAPTURE:
-        s += 'b';
-        break;
-    case PROMO_N:
-    case PROMO_N_CAPTURE:
-        s += 'n';
-        break;
-    default:
-        break;
-    }
-    return s;
-}
 
 static bool apply_uci_move(Board& pos, const std::string& uciMove)
 {
@@ -269,7 +235,7 @@ static void handle_go(const std::string& line, const Board& pos)
     if (soft_ms > 0 || hard_ms > 0)
         bm = search_best_move_timed(tmp, maxDepth, (int)soft_ms, (int)hard_ms);
     else
-        bm = search_best_move(tmp, maxDepth > 0 ? maxDepth : 10);
+        bm = search_best_move(tmp, maxDepth > 0 ? maxDepth : 12);
 
     std::string u = bm ? move_to_uci(bm) : "0000";
     std::cout << "bestmove " << u << "\n";

@@ -3,6 +3,7 @@
 #include "move.hh"
 #include "move_do.hh"
 #include "movegen.hh"
+#include "util.hh"
 
 #include <algorithm>
 #include <atomic>
@@ -13,7 +14,6 @@
 #include <limits>
 #include <string>
 #include <vector>
-
 namespace engine {
 
 static constexpr int MATE_SCORE = 30000;
@@ -43,28 +43,6 @@ static int g_history[2][64][64];
 // Piece 'values' for MVV/LVA (relative ordering)
 static constexpr int PVAL[6] = {100, 320, 330, 500, 900, 20000}; // P,N,B,R,Q,K
 
-inline bool is_promo_any(Move m)
-{
-    int f = flag(m);
-    return f >= PROMO_N && f <= PROMO_Q_CAPTURE;
-}
-
-inline bool is_promo_noncap(Move m)
-{
-    int f = flag(m);
-    return (f == PROMO_N || f == PROMO_B || f == PROMO_R || f == PROMO_Q);
-}
-
-// Quick piece lookup on a side/square
-inline Piece piece_on(const Board& b, Colour c, int sq)
-{
-    Bitboard m = (1ULL << sq);
-    for (int p = PAWN; p <= KING; ++p)
-        if (b.pieces[c][p] & m)
-            return (Piece)p;
-    return NO_PIECE;
-}
-
 inline Piece captured_piece(const Board& b, Move m)
 {
     const int fl = flag(m);
@@ -75,14 +53,10 @@ inline Piece captured_piece(const Board& b, Move m)
     const Colour them = (us == WHITE) ? BLACK : WHITE;
     const int to = to_sq(m);
 
-    for (int p = PAWN; p <= KING; ++p) {
-        if (b.pieces[them][p] & (1ULL << to))
-            return (Piece)p;
-    }
-    return NO_PIECE;
+    return piece_on(b, them, to);
 }
 
-// Attatcker piece current sits on 'from' before making move m
+// Attacker piece current sits on 'from' before making move m
 inline Piece attacker_piece(const Board& b, Move m)
 {
     const Colour us = b.side_to_move;
@@ -318,41 +292,6 @@ static inline bool past_hard()
            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - g_start).count() >= g_hard_ms;
 }
 
-static std::string sq_to_str(int sq)
-{
-    if (sq < 0 || sq > 63)
-        return "??";
-    char f = char('a' + (sq & 7));
-    char r = char('1' + (sq >> 3));
-    return std::string() + f + r;
-}
-
-static std::string move_to_uci(Move m)
-{
-    std::string s = sq_to_str(from_sq(m)) + sq_to_str(to_sq(m));
-    switch (flag(m)) {
-    case PROMO_Q:
-    case PROMO_Q_CAPTURE:
-        s += 'q';
-        break;
-    case PROMO_R:
-    case PROMO_R_CAPTURE:
-        s += 'r';
-        break;
-    case PROMO_B:
-    case PROMO_B_CAPTURE:
-        s += 'b';
-        break;
-    case PROMO_N:
-    case PROMO_N_CAPTURE:
-        s += 'n';
-        break;
-    default:
-        break;
-    }
-    return s;
-}
-
 // Quiesence search (captures and promotions only)
 static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
 {
@@ -374,13 +313,10 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
     order_moves(b, moves, 0);
 
     for (Move m : moves) {
-        const int fl = flag(m);
-        const bool isPromo =
-                (fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
-                 fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE);
+        // const int fl = flag(m);
 
         // only consider captures and promotions
-        if (!(is_capture(m) || isPromo))
+        if (!(is_capture(m) || is_promo_any(m)))
             continue;
 
         Undo u;

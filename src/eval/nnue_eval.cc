@@ -1,6 +1,7 @@
 #include "../engine/board.hh"
 #include "../engine/move.hh"
 #include "eval.hh"
+#include "util.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -76,38 +77,6 @@ static inline int feature_index(engine::Colour ref, engine::Colour pieceSide, in
     return base + sq_norm; // 0 ... 768*H-1 after multiplying by H when indexing columns
 }
 
-// quick piece lookup (no branching on NO_PIECE callers)
-static inline engine::Piece piece_on(const engine::Board& b, engine::Colour c, int sq)
-{
-    engine::Bitboard mask = (1ULL << sq);
-    for (int p = engine::PAWN; p <= engine::KING; ++p) {
-        if (b.pieces[c][p] & mask)
-            return static_cast<engine::Piece>(p);
-    }
-    return engine::NO_PIECE;
-}
-
-static inline engine::Piece promo_piece_from_flag(int fl)
-{
-    using namespace engine;
-    switch (fl) {
-    case engine::PROMO_N:
-    case engine::PROMO_N_CAPTURE:
-        return KNIGHT;
-    case engine::PROMO_B:
-    case engine::PROMO_B_CAPTURE:
-        return BISHOP;
-    case engine::PROMO_R:
-    case engine::PROMO_R_CAPTURE:
-        return ROOK;
-    case engine::PROMO_Q:
-    case engine::PROMO_Q_CAPTURE:
-        return QUEEN;
-    default:
-        return engine::NO_PIECE;
-    }
-}
-
 static inline int to_centipawns(float y)
 {
     float cp = y * (float)SCALE;
@@ -117,8 +86,6 @@ static inline int to_centipawns(float y)
         cp = -20000.0f;
     return (int)cp;
 }
-
-// --------------------------- IO helpers -------------------------
 
 static bool slurp_file(const std::string& p, std::vector<char>& bytes)
 {
@@ -173,7 +140,6 @@ static std::vector<std::string> candidate_paths(const char* path)
 }
 
 //  format loaders
-
 static bool try_load_float_raw(const std::vector<char>& blob)
 {
     if (blob.size() % 4 != 0)
@@ -568,7 +534,6 @@ int evaluate(const engine::Board& b)
     return evaluate(st);
 }
 
-// --------------------------- debug ------------------------------
 static inline void stats_vec_f(const char* name, const std::vector<float>& v)
 {
     if (v.empty()) {

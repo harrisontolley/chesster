@@ -2,11 +2,13 @@
 
 #include "attack_tables.hh"
 #include "bitboard.hh"
+#include "util.hh"
 #include "zobrist.hh"
 
 #include <cassert>
 
 namespace engine {
+
 // bitboard helpers
 static inline void bb_set(Bitboard& bb, int sq)
 {
@@ -17,14 +19,14 @@ static inline void bb_clear(Bitboard& bb, int sq)
     bb &= ~(1ULL << sq);
 }
 
-static inline Piece piece_at(const Board& b, Colour c, int sq)
-{
-    Bitboard mask = 1ULL << sq;
-    for (int p = PAWN; p <= KING; ++p)
-        if (b.pieces[c][p] & mask)
-            return static_cast<Piece>(p);
-    return NO_PIECE;
-}
+// static inline Piece piece_at(const Board& b, Colour c, int sq)
+// {
+//     Bitboard mask = 1ULL << sq;
+//     for (int p = PAWN; p <= KING; ++p)
+//         if (b.pieces[c][p] & mask)
+//             return static_cast<Piece>(p);
+//     return NO_PIECE;
+// }
 
 bool is_square_attacked(const Board& b, int sq, Colour by)
 {
@@ -112,7 +114,6 @@ static inline void clear_castle_if_rook_captured(Board& b, Colour them, int atSq
     }
 }
 
-// ----------------- Make / Unmake -----------------
 void make_move(Board& b, Move m, Undo& u)
 {
     const Colour us = b.side_to_move;
@@ -127,7 +128,7 @@ void make_move(Board& b, Move m, Undo& u)
     u.halfmove_prev = b.halfmove_clock;
     u.fullmove_prev = b.fullmove_number;
     u.captured_piece = NO_PIECE;
-    u.moved_piece = piece_at(b, us, from);
+    u.moved_piece = piece_on(b, us, from);
 
     // Update Zobrist key for removed EP square (if any & capturable)
     b.zkey_ ^= zobrist::ep_component(b, us);
@@ -145,6 +146,7 @@ void make_move(Board& b, Move m, Undo& u)
         bb_clear(b.pieces[c][p], sq);
         b.zkey_ ^= zobrist::psq(c, p, sq);
     };
+
     auto add_piece = [&](Colour c, Piece p, int sq) {
         bb_set(b.pieces[c][p], sq);
         b.zkey_ ^= zobrist::psq(c, p, sq);
@@ -154,7 +156,7 @@ void make_move(Board& b, Move m, Undo& u)
     bool any_capture = false;
     if (fl == CAPTURE || fl == PROMO_N_CAPTURE || fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE ||
         fl == PROMO_Q_CAPTURE) {
-        u.captured_piece = piece_at(b, them, to);
+        u.captured_piece = piece_on(b, them, to);
         assert(u.captured_piece != NO_PIECE && "Capture flag but no piece on target");
         remove_piece(them, u.captured_piece, to);
         any_capture = true;
@@ -167,26 +169,6 @@ void make_move(Board& b, Move m, Undo& u)
 
     // Move our piece off 'from'
     remove_piece(us, u.moved_piece, from);
-
-    // Promotions map
-    auto flag_to_promo_piece = [&](int f) -> Piece {
-        switch (f) {
-        case PROMO_N:
-        case PROMO_N_CAPTURE:
-            return KNIGHT;
-        case PROMO_B:
-        case PROMO_B_CAPTURE:
-            return BISHOP;
-        case PROMO_R:
-        case PROMO_R_CAPTURE:
-            return ROOK;
-        case PROMO_Q:
-        case PROMO_Q_CAPTURE:
-            return QUEEN;
-        default:
-            return NO_PIECE;
-        }
-    };
 
     // Place to-square based on move type
     if (fl == KING_CASTLE || fl == QUEEN_CASTLE) {
@@ -210,11 +192,9 @@ void make_move(Board& b, Move m, Undo& u)
             }
             b.castle.bk = b.castle.bq = false;
         }
-    } else if (
-            fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
-            fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
+    } else if (is_promo_any(m)) {
         assert(u.moved_piece == PAWN);
-        add_piece(us, flag_to_promo_piece(fl), to);
+        add_piece(us, promo_piece_from_flag(fl), to);
     } else {
         add_piece(us, u.moved_piece, to);
         if (fl == DOUBLE_PUSH) {
@@ -226,9 +206,11 @@ void make_move(Board& b, Move m, Undo& u)
     // Update castling rights (king/rook move or rook captured)
     if (u.moved_piece == KING) {
         if (us == WHITE) {
-            b.castle.wk = b.castle.wq = false;
+            b.castle.wk = false;
+            b.castle.wq = false;
         } else {
-            b.castle.bk = b.castle.bq = false;
+            b.castle.bk = false;
+            b.castle.bq = false;
         }
     } else if (u.moved_piece == ROOK) {
         clear_castle_if_rook_moves(b, us, from);
@@ -319,9 +301,7 @@ void unmake_move(Board& b, Move m, Undo& u)
                 add_piece(BLACK, ROOK, A8);
             }
         }
-    } else if (
-            fl == PROMO_N || fl == PROMO_B || fl == PROMO_R || fl == PROMO_Q || fl == PROMO_N_CAPTURE ||
-            fl == PROMO_B_CAPTURE || fl == PROMO_R_CAPTURE || fl == PROMO_Q_CAPTURE) {
+    } else if (is_promo_any(m)) {
         // remove promoted piece from 'to', restore pawn on 'from'
         Piece pp;
         switch (fl) {
