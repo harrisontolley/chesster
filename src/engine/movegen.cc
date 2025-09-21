@@ -3,24 +3,30 @@
 #include "attack_tables.hh"
 #include "bitboard.hh"
 #include "move_do.hh" // use is_square_attacked, Undo, make/unmake
+#include "util.hh"
 
 #include <cstdint>
 
 namespace engine {
-static inline int pop_lsb(Bitboard& b)
-{
-    int s = __builtin_ctzll(b);
-    b &= b - 1;
-    return s;
-}
+// static inline int pop_lsb(Bitboard& b)
+// {
+//     int s = __builtin_ctzll(b);
+//     b &= b - 1;
+//     return s;
+// }
 
 static inline void push(std::vector<Move>& out, int f, int t, int fl = QUIET)
 {
     out.push_back(make_move(f, t, fl));
 }
 
-static void gen_sliding(std::vector<Move>& out, [[maybe_unused]] const Board& b, Bitboard pieces, Bitboard occUs,
-                        Bitboard occThem, int deltas[4])
+static void gen_sliding(
+        std::vector<Move>& out,
+        [[maybe_unused]] const Board& b,
+        Bitboard pieces,
+        Bitboard occUs,
+        Bitboard occThem,
+        int deltas[4])
 {
     while (pieces) {
         int from = pop_lsb(pieces);
@@ -282,8 +288,8 @@ std::vector<Move> generate_moves(const Board& b)
         if (king) {
             int from = __builtin_ctzll(king);
             Bitboard kMoves =
-                (north(king) | south(king) | east(king) | west(king) | ne(king) | nw(king) | se(king) | sw(king)) &
-                ~occUs;
+                    (north(king) | south(king) | east(king) | west(king) | ne(king) | nw(king) | se(king) | sw(king)) &
+                    ~occUs;
 
             Bitboard caps = kMoves & occThem;
             Bitboard quiet = kMoves & ~occThem;

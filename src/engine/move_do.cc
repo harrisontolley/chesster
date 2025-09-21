@@ -19,15 +19,6 @@ static inline void bb_clear(Bitboard& bb, int sq)
     bb &= ~(1ULL << sq);
 }
 
-// static inline Piece piece_at(const Board& b, Colour c, int sq)
-// {
-//     Bitboard mask = 1ULL << sq;
-//     for (int p = PAWN; p <= KING; ++p)
-//         if (b.pieces[c][p] & mask)
-//             return static_cast<Piece>(p);
-//     return NO_PIECE;
-// }
-
 bool is_square_attacked(const Board& b, int sq, Colour by)
 {
     const Bitboard occAll = occupancy(b);

@@ -23,12 +23,6 @@ struct Undo {
 // helpers exposed so perft and movegen can share
 bool is_square_attacked(const Board& b, int sq, Colour by);
 
-inline int king_sq(const Board& b, Colour c)
-{
-    Bitboard k = b.pieces[c][KING];
-    return k ? __builtin_ctzll(k) : -1; // return -1 if no king found
-}
-
 // mutating move application - does not check legality
 void make_move(Board& b, Move m, Undo& u);
 void unmake_move(Board& b, Move m, Undo& u);

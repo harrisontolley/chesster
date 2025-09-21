@@ -3,6 +3,7 @@
 #include "move.hh"
 #include "move_do.hh"
 #include "movegen.hh"
+#include "see.hh"
 #include "util.hh"
 
 #include <algorithm>
@@ -49,6 +50,19 @@ static constexpr int ASP_DELTA_CP = 1024;
 
 // 3-fold repetition move stack
 static std::uint64_t g_repstack[MAX_PLY + 4];
+
+static constexpr int Q_DELTA_MARGIN = 90;        // centipawns; conservative
+static constexpr bool QS_USE_SEE = true;         // prune obviously losing captures
+static constexpr bool QS_ENABLE_QCHECKS = false; // add checking noncaptures in qsearch quiet nodes
+
+static inline bool gives_check(Board& b, eval::EvalState& es, Move m)
+{
+    Undo u;
+    make_move(b, m, u, &es);
+    bool gc = in_check(b);
+    unmake_move(b, m, u, &es);
+    return gc;
+}
 
 static inline bool is_threefold(const Board& b, int ply)
 {
@@ -131,7 +145,7 @@ static Move g_killer2[MAX_PLY];
 static int g_history[2][64][64];
 
 // Piece 'values' for MVV/LVA (relative ordering)
-static constexpr int PVAL[6] = {100, 320, 330, 500, 900, 20000}; // P,N,B,R,Q,K
+// static constexpr int PVAL[6] = {100, 320, 330, 500, 900, 20000}; // P,N,B,R,Q,K
 
 inline Piece captured_piece(const Board& b, Move m)
 {
@@ -161,7 +175,7 @@ inline int mvv_lva(const Board& b, Move m)
     if (vic == NO_PIECE || att == NO_PIECE)
         return 0;
 
-    return PVAL[vic] * 16 - PVAL[att];
+    return val_cp(vic) * 16 - val_cp(att);
 }
 
 inline int score_move(const Board& b, Move m, Move ttBest, int ply)
@@ -265,14 +279,6 @@ inline void clear_move_ordering()
     std::memset(g_history, 0, sizeof(g_history));
 }
 } // namespace
-
-static inline bool in_check(const Board& b)
-{
-    const Colour us = b.side_to_move;
-    const Colour them = (us == WHITE ? BLACK : WHITE);
-    int ksq = king_sq(b, us);
-    return ksq >= 0 && is_square_attacked(b, ksq, them);
-}
 
 static inline std::uint64_t pos_key(const Board& b)
 {
@@ -408,8 +414,33 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
     order_moves(b, moves, 0);
 
     for (Move m : moves) {
-        if (!(is_capture(m) || is_promo_any(m)))
+        const bool isCap = is_capture(m);
+        const bool isPromo = is_promo_any(m);
+
+        if (!(isCap || isPromo))
+            if (!QS_ENABLE_QCHECKS || !gives_check(b, es, m))
+                continue;
+
+        // Delta pruning (skip if even optimistic bound cant raise alpha)
+        // Upper bound gain from the move: captured piece + promo gain (if any)
+        // Avoid delta pruning pure promotions - they can be very good.
+        int ub_gain = 0;
+        if (isCap) {
+            Piece vic = captured_piece(b, m);
+            ub_gain += val_cp(vic);
+        }
+
+        if (isPromo)
+            ub_gain += promo_gain_cp(flag(m));
+
+        if (!isPromo && (stand + ub_gain + Q_DELTA_MARGIN < alpha))
             continue;
+
+        if (QS_USE_SEE && isCap) {
+            if (!see_ge(b, m, 0) && (stand + Q_DELTA_MARGIN < alpha)) {
+                continue;
+            }
+        }
 
         Undo u;
         make_move(b, m, u, &es);
