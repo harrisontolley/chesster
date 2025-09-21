@@ -45,4 +45,8 @@ inline Bitboard occupancy(const Board& b)
     return occupancy(b, WHITE) | occupancy(b, BLACK);
 }
 
+// Returns true for trivial insufficient material draws
+// KK, KBK, KNK
+bool trivial_insufficient_material(const Board& b);
+
 } // namespace engine

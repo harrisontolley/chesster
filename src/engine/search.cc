@@ -47,6 +47,25 @@ static constexpr int MATE_SCORE = 30000;
 static constexpr bool ASP_DEBUG = true; // ! DELETE ASP_DEBUG AFTER NNUE RETRAINING AND TESTING
 static constexpr int ASP_DELTA_CP = 1024;
 
+// 3-fold repetition move stack
+static std::uint64_t g_repstack[MAX_PLY + 4];
+
+static inline bool is_threefold(const Board& b, int ply)
+{
+    std::uint64_t k = b.zkey();
+    int count = 0;
+
+    const int limit = std::min(ply, b.halfmove_clock);
+
+    for (int i = ply - 2; i >= ply - limit; i -= 2) {
+        if (g_repstack[i] == k) {
+            if (++count >= 2)
+                return true;
+        }
+    }
+    return false;
+}
+
 static inline int mate_in(int ply)
 {
     return MATE_SCORE - ply;
@@ -422,6 +441,14 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
         }
     }
 
+    g_repstack[ply] = pos_key(b);
+
+    if (is_threefold(b, ply))
+        return 0;
+
+    if (trivial_insufficient_material(b))
+        return 0;
+
     // TT probe (try cut / exact return)
     {
         int tScore;
@@ -512,6 +539,9 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     g_nodes = 0;
 
     clear_move_ordering();
+
+    // Seed repetition stack at root
+    g_repstack[0] = pos_key(b);
 
     eval::EvalState es;
     eval::init_position(b, es);
@@ -635,6 +665,9 @@ Move search_best_move(Board& b, int depth)
     g_nodes = 0;
 
     clear_move_ordering();
+
+    // Seed repetition stack at root
+    g_repstack[0] = pos_key(b);
 
     eval::EvalState es;
     eval::init_position(b, es);
