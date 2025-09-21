@@ -16,26 +16,93 @@
 #include <vector>
 namespace engine {
 
+// transposition table
+enum : uint8_t { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
+struct TTEntry {
+    std::uint64_t key = 0;   // zobrist key -- 8 bytes
+    Move best = 0;           // best/PV move (if known) -- 2 bytes
+    int score = 0;           // stored score in cp -- 4 bytes
+    int16_t depth = -1;      // search depth remaining when stored -- 2 bytes
+    uint8_t flag = TT_EMPTY; // EXACT/LOWER/UPPER -- 1 byte
+    uint8_t _pad = 0;        // padding -- 1 byte
+    // 18 bytes total + padding
+};
+
+static constexpr std::size_t TT_LOG2 = 23;
+static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
+static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
+static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
+
+// time management statics
+using clock = std::chrono::steady_clock;
+static clock::time_point g_start;
+static int g_soft_ms = 0;
+static int g_hard_ms = 0;
+static std::atomic<std::uint64_t> g_nodes{0};
+
+static constexpr int MAX_PLY = 128; // for mate score encoding
 static constexpr int MATE_SCORE = 30000;
+
+// Aspiration window params
+static constexpr bool ASP_DEBUG = true; // ! DELETE ASP_DEBUG AFTER NNUE RETRAINING AND TESTING
+static constexpr int ASP_DELTA_CP = 1024;
+
 static inline int mate_in(int ply)
 {
     return MATE_SCORE - ply;
 }
+
 static inline int mated_in(int ply)
 {
     return -MATE_SCORE + ply;
 }
 
-static constexpr bool ASP_DEBUG = true;
-// Aspiration window half-width
-static constexpr int ASP_DELTA_CP = 1024;
+static inline bool is_mate_band(int s)
+{
+    return std::abs(s) > (MATE_SCORE - MAX_PLY);
+}
 
-static inline bool tt_probe(const Board&, int depth, int alpha, int beta, int& outScore, Move& outBest);
+// Convert a node-relative score to “mate N” *from root*.
+// At the root (ply==0), best is already root-relative if it came from TT,
+// but in the usual PV line we have node-evaluated scores. For safety:
+static inline int mate_ply_from_root(int s, int ply)
+{
+    if (!is_mate_band(s))
+        return 0;
+    // node-relative: +MATE means mate in (MATE_SCORE - s) from *this node*
+    // root distance = that + current ply
+    if (s > 0)
+        return (MATE_SCORE - s) + ply;
+    // negative means we are mated in (MATE_SCORE + s)
+    return -((MATE_SCORE + s) + ply);
+}
+
+static inline bool tt_probe(const Board&, int depth, int alpha, int beta, int ply, int& outScore, Move& outBest);
+
+// Treating anything within MAX_PLY of MATE_SCORE as mate score
+static inline bool is_mate_score(int s)
+{
+    constexpr int MATE_NEAR = MATE_SCORE - MAX_PLY;
+    return s > MATE_NEAR || s < -MATE_NEAR;
+}
+
+// Encode for TT
+static inline int encode_tt_mate_score(int s, int ply)
+{
+    if (!(is_mate_score(s)))
+        return s;
+    return (s > 0) ? (s + ply) : (s - ply);
+}
+
+static inline int decode_tt_mate_score(int s, int ply)
+{
+    if (!(is_mate_score(s)))
+        return s;
+    return (s > 0) ? (s - ply) : (s + ply);
+}
 
 // Move ordering machinery
 namespace {
-
-constexpr int MAX_PLY = 128;
 
 // two killer moves per ply (quiet moves that caused beta cutoffs)
 static Move g_killer1[MAX_PLY];
@@ -136,7 +203,7 @@ inline void order_moves(Board& b, std::vector<Move>& moves, int ply)
     int dummy;
     (void)dummy;
 
-    (void)tt_probe(b, 0, -30000, 30000, dummy, ttBest);
+    (void)tt_probe(b, 0, -30000, 30000, ply, dummy, ttBest);
 
     std::stable_sort(moves.begin(), moves.end(), [&](Move m1, Move m2) {
         int sa = score_move(b, m1, ttBest, ply);
@@ -180,30 +247,6 @@ inline void clear_move_ordering()
 }
 } // namespace
 
-// time management statics
-using clock = std::chrono::steady_clock;
-static clock::time_point g_start;
-static int g_soft_ms = 0;
-static int g_hard_ms = 0;
-static std::atomic<std::uint64_t> g_nodes{0};
-
-// transposition table
-enum : uint8_t { TT_EMPTY = 0, TT_EXACT = 1, TT_LOWER = 2, TT_UPPER = 3 };
-struct TTEntry {
-    std::uint64_t key = 0;   // zobrist key -- 8 bytes
-    Move best = 0;           // best/PV move (if known) -- 2 bytes
-    int score = 0;           // stored score in cp -- 4 bytes
-    int16_t depth = -1;      // search depth remaining when stored -- 2 bytes
-    uint8_t flag = TT_EMPTY; // EXACT/LOWER/UPPER -- 1 byte
-    uint8_t _pad = 0;        // padding -- 1 byte
-    // 18 bytes total + padding
-};
-
-static constexpr std::size_t TT_LOG2 = 23;
-static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
-static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
-static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
-
 static inline bool in_check(const Board& b)
 {
     const Colour us = b.side_to_move;
@@ -224,7 +267,7 @@ static inline TTEntry& tt_slot(std::uint64_t key)
 
 // Probe: returns true iff entry can be used to cut or exact return.
 // always returns a move hint (outBest) if present, even if not cut-usable.
-static inline bool tt_probe(const Board& b, int depth, int alpha, int beta, int& outScore, Move& outBest)
+static inline bool tt_probe(const Board& b, int depth, int alpha, int beta, int ply, int& outScore, Move& outBest)
 {
     const std::uint64_t k = pos_key(b);
     TTEntry& e = tt_slot(k);
@@ -239,18 +282,20 @@ static inline bool tt_probe(const Board& b, int depth, int alpha, int beta, int&
 
     // searched this position deeper (or equal) previously
     if (e.depth >= depth) {
+        const int dec = decode_tt_mate_score(e.score, ply);
+
         if (e.flag == TT_EXACT) {
-            outScore = e.score;
+            outScore = dec;
             return true;
         }
 
-        if (e.flag == TT_LOWER && e.score >= beta) {
-            outScore = e.score;
+        if (e.flag == TT_LOWER && dec >= beta) {
+            outScore = dec;
             return true;
         }
 
-        if (e.flag == TT_UPPER && e.score <= alpha) {
-            outScore = e.score;
+        if (e.flag == TT_UPPER && dec <= alpha) {
+            outScore = dec;
             return true;
         }
     }
@@ -258,14 +303,17 @@ static inline bool tt_probe(const Board& b, int depth, int alpha, int beta, int&
 }
 
 // Store or replace an entry (unconditional). Replace if depth is greater/equal.
-static inline void tt_store(const Board& b, int depth, int score, uint8_t flag, Move best)
+static inline void tt_store(const Board& b, int depth, int score, uint8_t flag, Move best, int ply)
 {
     const std::uint64_t k = pos_key(b);
     TTEntry& e = tt_slot(k);
+
+    const int enc = encode_tt_mate_score(score, ply);
+
     if (e.flag == TT_EMPTY || e.key != k || e.depth <= depth) {
         e.key = k;
         e.best = best;
-        e.score = score;
+        e.score = enc;
         e.depth = static_cast<int16_t>(depth);
         e.flag = flag;
     }
@@ -378,7 +426,7 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
     {
         int tScore;
         Move tBest = 0;
-        if (tt_probe(b, depth, alpha, beta, tScore, tBest))
+        if (tt_probe(b, depth, alpha, beta, ply, tScore, tBest))
             return tScore;
     }
 
@@ -397,7 +445,7 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
     if (moves.empty()) {
         // checkmate or stalemate
         int out = in_check(b) ? mated_in(ply) : 0;
-        tt_store(b, depth, out, TT_EXACT, 0);
+        tt_store(b, depth, out, TT_EXACT, 0, ply);
         return out;
     }
 
@@ -450,7 +498,7 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
         flag = TT_UPPER;
     else if (best >= beta)
         flag = TT_LOWER;
-    tt_store(b, depth, best, flag, bestMove);
+    tt_store(b, depth, best, flag, bestMove, ply);
 
     return best;
 }
@@ -563,8 +611,14 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
         auto ms = duration_cast<milliseconds>(clock::now() - g_start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
         long nps = ms > 0 ? static_cast<long>((nodes * 1000) / ms) : 0;
-        std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "
-                  << nps << " pv " << move_to_uci(best_move) << "\n";
+        if (is_mate_band(best)) {
+            int m = mate_ply_from_root(best, /*ply=*/0); // root
+            std::cout << "info depth " << d << " score mate " << m << " time " << ms << " nodes " << nodes << " nps "
+                      << nps << " pv " << move_to_uci(best_move) << "\n";
+        } else {
+            std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "
+                      << nps << " pv " << move_to_uci(best_move) << "\n";
+        }
 
         if (time_enabled() && past_soft())
             break;
@@ -664,8 +718,14 @@ Move search_best_move(Board& b, int depth)
         auto ms = duration_cast<milliseconds>(clock::now() - start).count();
         auto nodes = g_nodes.load(std::memory_order_relaxed);
         long nps = ms > 0 ? static_cast<long>((nodes * 1000) / ms) : 0;
-        std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "
-                  << nps << " pv " << move_to_uci(best_move) << "\n";
+        if (is_mate_band(best)) {
+            int m = mate_ply_from_root(best, /*ply=*/0); // root
+            std::cout << "info depth " << d << " score mate " << m << " time " << ms << " nodes " << nodes << " nps "
+                      << nps << " pv " << move_to_uci(best_move) << "\n";
+        } else {
+            std::cout << "info depth " << d << " score cp " << best << " time " << ms << " nodes " << nodes << " nps "
+                      << nps << " pv " << move_to_uci(best_move) << "\n";
+        }
     }
 
     return best_move;
