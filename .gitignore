@@ -1,5 +1,6 @@
 script.py
 output.txt
+checkpoints/
 
 # Build trees
 /build/
