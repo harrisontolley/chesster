@@ -2,18 +2,12 @@
 
 #include "attack_tables.hh"
 #include "bitboard.hh"
-#include "move_do.hh" // use is_square_attacked, Undo, make/unmake
+#include "move_do.hh"
 #include "util.hh"
 
 #include <cstdint>
 
 namespace engine {
-// static inline int pop_lsb(Bitboard& b)
-// {
-//     int s = __builtin_ctzll(b);
-//     b &= b - 1;
-//     return s;
-// }
 
 static inline void push(std::vector<Move>& out, int f, int t, int fl = QUIET)
 {
@@ -354,19 +348,13 @@ std::vector<Move> generate_legal_moves(Board& b)
     std::vector<Move> legal;
     std::vector<Move> pseudo = generate_moves(b);
 
-    const Colour us = b.side_to_move;
-    const Colour them = (us == WHITE) ? BLACK : WHITE;
-
     for (Move m : pseudo) {
         Undo u;
         make_move(b, m, u);
-
-        int ksq = king_sq(b, us);
-        bool in_check = (ksq >= 0) && is_square_attacked(b, ksq, them);
-
+        bool checked = in_check(b);
         unmake_move(b, m, u);
 
-        if (!in_check)
+        if (!checked)
             legal.push_back(m);
     }
 
