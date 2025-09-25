@@ -2,6 +2,7 @@
 #include "board.hh"
 #include "move.hh"
 #include "move_do.hh"
+#include "movegen.hh"
 
 #include <string>
 
@@ -109,6 +110,22 @@ static inline bool in_check(const Board& b)
     const Colour them = (us == WHITE ? BLACK : WHITE);
     int ksq = king_sq(b, us);
     return ksq >= 0 && is_square_attacked(b, ksq, them);
+}
+
+static inline bool is_checkmate(Board& b)
+{
+    if (!in_check(b))
+        return false;
+    auto moves = generate_legal_moves(b);
+    return moves.empty();
+}
+
+static inline bool is_stalemate(Board& b)
+{
+    if (in_check(b))
+        return false;
+    auto moves = generate_legal_moves(b);
+    return moves.empty();
 }
 
 inline std::string move_to_uci(Move m)
