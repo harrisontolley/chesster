@@ -348,10 +348,16 @@ std::vector<Move> generate_legal_moves(Board& b)
     std::vector<Move> legal;
     std::vector<Move> pseudo = generate_moves(b);
 
+    const Colour us = b.side_to_move;
+    const Colour them = (us == WHITE) ? BLACK : WHITE;
+
     for (Move m : pseudo) {
         Undo u;
         make_move(b, m, u);
-        bool checked = in_check(b);
+
+        int ksq = king_sq(b, us);
+        bool checked = (ksq >= 0) && is_square_attacked(b, ksq, them);
+
         unmake_move(b, m, u);
 
         if (!checked)
