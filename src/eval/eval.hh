@@ -1,5 +1,5 @@
 #pragma once
-#include "engine/board.hh"
+#include "../src/engine/board.hh"
 
 #include <cstdint>
 #include <vector>

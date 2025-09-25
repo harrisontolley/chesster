@@ -45,7 +45,7 @@ static constexpr int MAX_PLY = 128; // for mate score encoding
 static constexpr int MATE_SCORE = 30000;
 
 // Aspiration window params
-static constexpr bool ASP_DEBUG = true; // ! DELETE ASP_DEBUG AFTER NNUE RETRAINING AND TESTING
+static constexpr bool ASP_DEBUG = false; // ! DELETE ASP_DEBUG AFTER NNUE RETRAINING AND TESTING
 static constexpr int ASP_DELTA_CP = 1024;
 
 // 3-fold repetition move stack
