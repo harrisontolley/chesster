@@ -3,7 +3,14 @@
 #include "move.hh"
 
 namespace engine {
+
 Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms);
+
 Move search_best_move(Board& b, int depth);
+
 void tt_clear(); // allow UCI to wipe TT on ucinewgame
+
+void request_stop();
+
+void reset_stop();
 } // namespace engine

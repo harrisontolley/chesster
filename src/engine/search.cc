@@ -29,7 +29,7 @@ struct TTEntry {
     // 18 bytes total + padding
 };
 
-static constexpr std::size_t TT_LOG2 = 23;
+static constexpr std::size_t TT_LOG2 = 22;
 static constexpr std::size_t TT_SIZE = (1ULL << TT_LOG2);
 static constexpr std::uint64_t TT_MASK = TT_SIZE - 1;
 static TTEntry g_tt[TT_SIZE]; // fixed size for simplicity
@@ -54,6 +54,18 @@ static std::uint64_t g_repstack[MAX_PLY + 4];
 static constexpr int Q_DELTA_MARGIN = 90;        // centipawns; conservative
 static constexpr bool QS_USE_SEE = true;         // prune obviously losing captures
 static constexpr bool QS_ENABLE_QCHECKS = false; // add checking noncaptures in qsearch quiet nodes
+
+// aborting
+static std::atomic<bool> g_abort{false};
+
+void request_stop()
+{
+    g_abort.store(true, std::memory_order_relaxed);
+}
+void reset_stop()
+{
+    g_abort.store(false, std::memory_order_relaxed);
+}
 
 static inline bool gives_check(Board& b, eval::EvalState& es, Move m)
 {
@@ -376,7 +388,7 @@ static inline int qsearch(Board& b, eval::EvalState& es, int alpha, int beta)
 
     if (time_enabled()) {
         static thread_local int tick = 0;
-        if ((++tick & 31) == 0 && past_hard())
+        if ((++tick & 31) == 0 && (past_hard() || g_abort.load(std::memory_order_relaxed)))
             return eval::evaluate(es);
     }
 
@@ -466,7 +478,7 @@ static inline int negamax(Board& b, eval::EvalState& es, int depth, int alpha, i
     static thread_local int check_counter = 0;
     if (time_enabled()) {
         // every 32 nodes check if we have exceeded maximum allowable time.
-        if ((++check_counter & 31) == 0 && past_hard()) {
+        if ((++check_counter & 31) == 0 && (past_hard() || g_abort.load(std::memory_order_relaxed))) {
             // Out of time: return static eval as a bounded fallback
             return eval::evaluate(es);
         }
@@ -581,7 +593,19 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
     bool have_last = false;
     int last_score = 0;
 
+    std::vector<Move> rootMoves = generate_legal_moves(b);
+    if (!rootMoves.empty()) {
+        order_moves(b, rootMoves, 0);
+        best_move = rootMoves[0];
+    } else {
+        // no legal moves: checkmate or stalemate
+        return 0;
+    }
+
     for (int d = 1; d <= maxDepth; ++d) {
+        if (g_abort.load(std::memory_order_relaxed))
+            break;
+
         // Reset aspiration window each depth
         int delta = have_last ? ASP_DELTA_CP : 500; // wide for the first real score
         int alpha_try = have_last ? (last_score - delta) : -MATE_SCORE;
@@ -591,6 +615,9 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
         Move local_best = 0;
 
         while (true) {
+            if (g_abort.load(std::memory_order_relaxed))
+                break;
+
             if (time_enabled() && past_hard())
                 break;
 
@@ -622,6 +649,9 @@ Move search_best_move_timed(Board& b, int maxDepth, int soft_ms, int hard_ms)
             }
 
             if (time_enabled() && past_hard())
+                break;
+
+            if (g_abort.load(std::memory_order_relaxed))
                 break;
 
             // aspiration result check (use the tried window, not the updated alpha/beta)
@@ -706,6 +736,15 @@ Move search_best_move(Board& b, int depth)
     Move best_move = 0;
     bool have_last = false;
     int last_score = 0;
+
+    std::vector<Move> rootMoves = generate_legal_moves(b);
+    if (!rootMoves.empty()) {
+        order_moves(b, rootMoves, 0);
+        best_move = rootMoves[0];
+    } else {
+        // no legal moves: checkmate or stalemate
+        return 0;
+    }
 
     for (int d = 1; d <= depth; ++d) {
         int delta = have_last ? ASP_DELTA_CP : 500;

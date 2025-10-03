@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -153,6 +154,8 @@ static void handle_go(const std::string& line, const Board& pos)
     int depth = -1, movetime = -1;
     long wtime = -1, btime = -1, winc = 0, binc = 0;
     int movestogo = 0; // 0 means unknown
+    bool infinite = false;
+    bool ponder = false;
 
     {
         std::istringstream ss(line);
@@ -173,6 +176,10 @@ static void handle_go(const std::string& line, const Board& pos)
                 ss >> binc;
             } else if (tok == "movestogo") {
                 ss >> movestogo;
+            } else if (tok == "infinite") {
+                infinite = true;
+            } else if (tok == "ponder") {
+                ponder = true;
             }
             // ignore: nodes/infinite/ponder/searchmoves for now
         }
@@ -216,8 +223,8 @@ static void handle_go(const std::string& line, const Board& pos)
         // never exceed base - overhead
         hard = std::min(hard, clamp_ms(base - move_overhead_ms));
 
-        // sanity: soft <= hard
-        soft = std::min(soft, std::max(soft, hard - 1));
+        if (soft > hard)
+            soft = std::max(5L, hard - 1);
 
         // ensure sanity
         soft_ms = soft;
@@ -230,12 +237,25 @@ static void handle_go(const std::string& line, const Board& pos)
         maxDepth = 10;
     }
 
+    if (infinite || ponder) {
+        soft_ms = 0;
+        hard_ms = std::numeric_limits<int>::max() / 4;
+    }
+
+    engine::reset_stop();
+
     Board tmp = pos; // search on a copy
     Move bm;
     if (soft_ms > 0 || hard_ms > 0)
         bm = search_best_move_timed(tmp, maxDepth, (int)soft_ms, (int)hard_ms);
     else
         bm = search_best_move(tmp, maxDepth > 0 ? maxDepth : 12);
+
+    if (!bm) {
+        auto v = generate_legal_moves(tmp);
+        if (!v.empty())
+            bm = v[0];
+    }
 
     std::string u = bm ? move_to_uci(bm) : "0000";
     std::cout << "bestmove " << u << "\n";
@@ -252,12 +272,9 @@ int main()
     // Ties cin to cout (before any cin read, cout is flushed).
     std::cin.tie(&std::cout);
 
-    // initialise UCI
-    uci_print_id();
-    Board pos = Board::startpos();
-
     // force eval to be initialised, as I never use other NNUE files.
     initialise_eval();
+    Board pos = Board::startpos();
 
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -303,6 +320,14 @@ int main()
             handle_go(line, pos);
             continue;
         }
+
+        if (line == "stop") {
+            engine::request_stop();
+            continue;
+        }
+
+        if (line == "ponderhit")
+            continue;
     }
     return 0;
 }
