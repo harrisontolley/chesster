@@ -1,8 +1,9 @@
-cmake_minimum_required(VERSION 3.24) # match CMakePresets.json
+cmake_minimum_required(VERSION 3.24)
 project(chesster LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---- Options from your presets ----
 option(CHESSTER_SANITIZE "Enable ASan/UBSan" OFF)
@@ -27,9 +28,11 @@ add_library(chesster_engine
   src/engine/perft.cc
   src/engine/search.cc
   src/engine/see.cc
-  src/engine/zobrist.cc  
+  src/engine/zobrist.cc
   src/eval/nnue_eval.cc
 )
+
+# Publish include roots so dependents can do #include "engine/..." and "eval/..."
 target_include_directories(chesster_engine PUBLIC
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/src/engine
@@ -71,7 +74,12 @@ target_include_directories(chesster_tests PRIVATE
 )
 target_compile_options(chesster_tests PRIVATE -Wall -Wextra -Wpedantic)
 
-# Catch2 test discovery
 list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
 include(Catch)
 catch_discover_tests(chesster_tests)
+
+
+add_executable(nnue_tourney tools/nnue_tourney.cc)
+target_include_directories(nnue_tourney PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/engine)
+target_link_libraries(nnue_tourney PRIVATE chesster_engine)
+target_compile_options(nnue_tourney PRIVATE -Wall -Wextra -Wpedantic)
