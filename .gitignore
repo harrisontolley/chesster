@@ -2,6 +2,7 @@ script.py
 output.txt
 checkpoints/
 out.csv
+matches
 
 /src/eval/weights/current/optimiser_state/*
 /src/eval/weights/current/log.txt

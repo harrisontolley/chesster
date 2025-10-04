@@ -149,26 +149,31 @@ static bool try_load_float_raw(const std::vector<char>& blob)
         return false;
 
     H = (int)((n_floats - 1) / 771);
-    std::vector<float> buf(n_floats);
-    std::memcpy(buf.data(), blob.data(), blob.size());
 
+    // Sanity guard to avoid bad files
+    if (H <= 0 || H > 8192)
+        return false;
+
+    // Interpret bytes as float array without extra copies
+    const float* p = reinterpret_cast<const float*>(blob.data());
+
+    // L0W_Tf: already column-major by feature [768 x H]
     L0W_Tf.assign((std::size_t)768 * H, 0.0f);
+    std::memcpy(L0W_Tf.data(), p, sizeof(float) * (std::size_t)768 * H);
+    p += (std::size_t)768 * H;
+
+    // L0B
     L0Bf.assign(H, 0.0f);
+    std::memcpy(L0Bf.data(), p, sizeof(float) * (std::size_t)H);
+    p += H;
+
+    // L1W
     L1Wf.assign(2 * H, 0.0f);
+    std::memcpy(L1Wf.data(), p, sizeof(float) * (std::size_t)(2 * H));
+    p += 2 * H;
 
-    const float* L0W_row = buf.data(); // [H x 768] row-major
-    const float* L0B_raw = L0W_row + (std::size_t)H * 768;
-    const float* L1W_raw = L0B_raw + H;
-    const float L1B_raw = *(L1W_raw + 2 * H);
-
-    // transpose to [768 x H] (column by feature)
-    for (int feat = 0; feat < 768; ++feat)
-        for (int i = 0; i < H; ++i)
-            L0W_Tf[(std::size_t)feat * H + i] = L0W_row[(std::size_t)i * 768 + feat];
-
-    std::copy(L0B_raw, L0B_raw + H, L0Bf.begin());
-    std::copy(L1W_raw, L1W_raw + 2 * H, L1Wf.begin());
-    L1Bf = L1B_raw;
+    // L1B
+    L1Bf = *p; // single float
 
     IS_Q = false;
     return true;
