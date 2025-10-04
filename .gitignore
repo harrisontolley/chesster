@@ -3,6 +3,9 @@ output.txt
 checkpoints/
 out.csv
 
+/src/eval/weights/current/optimiser_state/*
+/src/eval/weights/current/log.txt
+
 
 # Build trees
 /build/
