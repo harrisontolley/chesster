@@ -6,7 +6,7 @@ matches
 
 /src/eval/weights/current/optimiser_state/*
 /src/eval/weights/current/log.txt
-
+/src/eval/weights/candidates/*
 
 # Build trees
 /build/
