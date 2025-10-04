@@ -16,8 +16,8 @@
 #include <string>
 
 using namespace engine;
-static std::string eval_file_path;   // from UCI setoption
-static std::string last_loaded_path; // actually loaded file
+static std::string eval_file_path = "src/eval/weights/current/raw.bin";   // from UCI setoption
+static std::string last_loaded_path = "src/eval/weights/current/raw.bin"; // actually loaded file
 static bool eval_initialised = false;
 static int move_overhead_ms = 80;
 
@@ -90,7 +90,14 @@ static void handle_setoption(const std::string& line)
         std::getline(ss, value);
         while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
             value.erase(value.begin());
-        eval_file_path = value;
+
+        // Only update if non-empty
+        if (!value.empty()) {
+            eval_file_path = value;
+        } else {
+            std::cout << "info string EvalFile unchanged (empty value)\n";
+        }
+
     } else if (name == "MoveOverhead") {
         ss >> w; // value
         int v = 0;
