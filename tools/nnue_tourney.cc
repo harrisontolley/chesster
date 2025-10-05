@@ -1,3 +1,6 @@
+// OLD CODE THAT WAS USED FOR TOURAMENTS OF NNUE WEIGHTS
+// NOW USE CUTECHESS CLI DIRECTLY AGAINST STOCKFISH AT SPECIFIC ELOS
+
 #include "engine/board.hh"
 #include "engine/fen.hh"
 #include "engine/move.hh"
