@@ -12,6 +12,8 @@ A tiny **UCI** chess engine with an NNUE evaluator.
 
 * **Strength**: in quick runs with Unbalanced Human Openings (UHO), Chesster reached an **~2000 Elo** which is **stronger than ~99.5% of humans**  (rough estimate; not a formal rating).
 
+A LOT of improvements can be made, but this project was primarily to learn a little bit of C++ and have fun with a game I love.  
+
 ---
 
 ## Build (CMake)
@@ -91,9 +93,7 @@ cutechess-cli \
 * This README is intentionally brief; peek into `src/` for details.
 
 ## Future Extensions
-A **LOT** of improvements can be made, but this project was primarily to learn a little bit of C++ and have fun with a game I love.  
-
-Some of these improvements/extensions include:
+Some improvements/extensions include:
 * **Stronger Pruning and Search**: add Null-Move Pruning + Late Move Reductions + Futility/Razoring, with a small check extension. Should cut big nodes in search tree, and predicted (perhaps) semi-large elo gain. 
 * **Transposition Table Rework**: Switch to clustered TT (4-way buckets) with UCI Hash size, store static eval, and improve replacement by depth/age. 
 * **Faster Movegen**: Use magic bitboards and pin/check masks to generate (mostly) legal moves. Will produce higher NPS and thus greater depth searches in same time control. 
